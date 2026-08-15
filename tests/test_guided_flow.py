@@ -108,6 +108,32 @@ def _last(sent):
     return None
 
 
+def _seed_poste_actif(date, poste=1):
+    """Ouvre un poste directement en base, synthese deja marquee "envoyee".
+
+    La verification opportuniste de cloture (spec v2 §5.1) tourne a la fin
+    de CHAQUE webhook (message ou callback) sur l'horloge REELLE — pas
+    seulement au moment du demarrage. Si l'heure reelle a laquelle la suite
+    de tests s'execute est deja passee 16:30, un poste actif serait
+    referme des le premier webhook suivant, quel qu'il soit. Marquer la
+    synthese comme deja envoyee neutralise ce declenchement pour les tests
+    qui portent sur la saisie/correction, pas sur la cloture elle-meme."""
+    from bot import db as db_module
+
+    conn = db_module.get_connection()
+    conn.execute(
+        "INSERT INTO postes (date, poste, statut) VALUES (?, ?, 'actif') "
+        "ON CONFLICT(date, poste) DO UPDATE SET statut='actif'",
+        (date, poste),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO syntheses_envoyees (date, poste, envoyee_a) VALUES (?, ?, ?)",
+        (date, poste, datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
 def _seed_attente_cumuls(client, heure, message_id, poste=1, date=TEST_DATE, user_id="11", dt=None):
     """Place directement un etat ATTENTE_CUMULS, pour tester la suite du
     flux (carte, validation, correction) sans dependre du snap horaire de
@@ -183,7 +209,7 @@ def test_guide_corriger_reboucle_sur_forcereply(client):
     n = datetime.now(tz)
     today = n.strftime("%Y-%m-%d")
 
-    _post_message(client, "/start_day", n.hour, n.minute, date=today)
+    _seed_poste_actif(today)
     _seed_attente_cumuls(client, "09:00", message_id=42, date=today, dt=n)
 
     _post_message(client, "133 160 80", n.hour, n.minute, reply_to_mid=42, date=today)
@@ -316,15 +342,17 @@ def test_menu_demarrage_confirme(client):
 def test_menu_corriger_flow_complet(client):
     # Le menu (callback) opere sur l'horloge REELLE -> ce test reste sur
     # l'horloge reelle de bout en bout (voir test_guide_corriger_reboucle_
-    # sur_forcereply pour la meme remarque).
+    # sur_forcereply pour la meme remarque). Poste ouvert directement en
+    # base (pas via /menu -> demarrer) pour ne pas declencher la cloture
+    # opportuniste si l'heure reelle est deja passee 16:30 (spec v2 §5.1) —
+    # ce test porte sur la correction, pas sur le demarrage.
     tz = ZoneInfo(client.app_module.config.TIMEZONE)
     n = datetime.now(tz)
     today = n.strftime("%Y-%m-%d")
+    _seed_poste_actif(today)
 
     _post_message(client, "/menu", n.hour, n.minute, date=today)
     menu = _last(client.sent)
-    _post_callback(client, "menu_start_day", message_id=menu["mid"])
-    _post_callback(client, "confirm_action:start_day", message_id=menu["mid"])
 
     from bot import db as db_module, logic as logic_module
     conn = db_module.get_connection()

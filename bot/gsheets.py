@@ -3,15 +3,27 @@
 Toutes les fonctions sont des no-op journalisés tant que
 `config.GOOGLE_ENABLED` est faux (pas de service account configuré) : le
 bot, l'Excel local (`bot.excel_export`) et les graphiques restent
-pleinement fonctionnels sans Google Sheets. Les dépendances Google ne sont
-importées qu'au moment de l'appel, pour ne jamais bloquer le démarrage du
-bot si elles ne sont pas installées.
+pleinement fonctionnels sans Google Sheets.
+
+⚠️ Appelle l'API REST directement via `requests`, jamais via
+`googleapiclient`/`httplib2` : sur PythonAnywhere gratuit, `httplib2`
+tente une connexion directe (`OSError: Network is unreachable`) au lieu de
+passer par le proxy sortant imposé, alors que `requests` — déjà utilisé
+pour Telegram — passe sans problème (constaté en conditions réelles,
+15/08/2026). `google.auth.transport.requests.Request` (aussi basé sur
+`requests`) sert uniquement à rafraîchir le jeton d'accès.
 """
 import logging
+from urllib.parse import quote
+
+import requests
 
 from . import config, logic
 
 logger = logging.getLogger(__name__)
+
+SHEETS_API = "https://sheets.googleapis.com/v4/spreadsheets"
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 DONNEES_HEADERS = [
     "Date production", "Jour", "Poste", "Ligne", "Code", "Point", "Créneau", "Coef",
@@ -21,27 +33,27 @@ DONNEES_HEADERS = [
 OVERWRITE_BANNER = "⚠️ Onglet régénéré automatiquement — toute modification manuelle sera écrasée à la prochaine clôture."
 
 
-def _service():
-    """Construit le client Sheets API v4 authentifié en compte de service.
-
-    PythonAnywhere gratuit impose un proxy HTTP sortant, et `httplib2` (le
-    transport par défaut de `googleapiclient`) ne lit pas toujours les
-    variables d'environnement de proxy automatiquement (spec v2 §7.4) — on
-    force explicitement `httplib2.proxy_info_from_environment()` plutôt que
-    de compter sur la détection automatique."""
+def _access_token():
+    """Jeton d'acces frais pour le compte de service, via le transport
+    `requests` (jamais `httplib2` — voir docstring du module)."""
     import json
 
-    import httplib2
+    from google.auth.transport.requests import Request
     from google.oauth2 import service_account
-    from google_auth_httplib2 import AuthorizedHttp
-    from googleapiclient.discovery import build
 
     raw = config.GOOGLE_SERVICE_ACCOUNT_JSON
     info = json.loads(raw) if raw.strip().startswith("{") else json.load(open(raw, encoding="utf-8"))
-    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-    credentials = service_account.Credentials.from_service_account_info(info, scopes=scopes)
-    http = AuthorizedHttp(credentials, http=httplib2.Http(proxy_info=httplib2.proxy_info_from_environment()))
-    return build("sheets", "v4", http=http, cache_discovery=False)
+    credentials = service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
+    credentials.refresh(Request())
+    return credentials.token
+
+
+def _headers():
+    return {"Authorization": f"Bearer {_access_token()}", "Content-Type": "application/json"}
+
+
+def _range_url(sheet_name, a1_range, suffix=""):
+    return f"{SHEETS_API}/{config.GOOGLE_SPREADSHEET_ID}/values/{quote(f'{sheet_name}!{a1_range}', safe='')}{suffix}"
 
 
 def _row_from_checkpoint(row):
@@ -59,17 +71,17 @@ def _row_from_checkpoint(row):
     ]
 
 
-def _ensure_donnees_header(service):
+def _ensure_donnees_header(headers):
     """Ecrit la ligne d'en-tete si l'onglet Donnees est encore vide (premier
     appel seulement — les appels suivants trouvent la ligne 1 deja remplie)."""
-    res = service.spreadsheets().values().get(
-        spreadsheetId=config.GOOGLE_SPREADSHEET_ID, range="Donnees!A1",
-    ).execute()
-    if not res.get("values"):
-        service.spreadsheets().values().update(
-            spreadsheetId=config.GOOGLE_SPREADSHEET_ID, range="Donnees!A1",
-            valueInputOption="RAW", body={"values": [DONNEES_HEADERS]},
-        ).execute()
+    resp = requests.get(_range_url("Donnees", "A1"), headers=headers, timeout=15)
+    resp.raise_for_status()
+    if not resp.json().get("values"):
+        resp = requests.put(
+            _range_url("Donnees", "A1"), headers=headers,
+            params={"valueInputOption": "RAW"}, json={"values": [DONNEES_HEADERS]}, timeout=15,
+        )
+        resp.raise_for_status()
 
 
 def append_donnees_row(checkpoint_row):
@@ -78,16 +90,14 @@ def append_donnees_row(checkpoint_row):
         logger.info("gsheets: desactive (pas de service account/spreadsheet configure) — append ignore")
         return False
     try:
-        service = _service()
-        _ensure_donnees_header(service)
-        body = {"values": [_row_from_checkpoint(checkpoint_row)]}
-        service.spreadsheets().values().append(
-            spreadsheetId=config.GOOGLE_SPREADSHEET_ID,
-            range="Donnees!A1",
-            valueInputOption="RAW",
-            insertDataOption="INSERT_ROWS",
-            body=body,
-        ).execute()
+        headers = _headers()
+        _ensure_donnees_header(headers)
+        resp = requests.post(
+            _range_url("Donnees", "A1", ":append"), headers=headers,
+            params={"valueInputOption": "RAW", "insertDataOption": "INSERT_ROWS"},
+            json={"values": [_row_from_checkpoint(checkpoint_row)]}, timeout=15,
+        )
+        resp.raise_for_status()
         return True
     except Exception:  # noqa: BLE001 - ne doit jamais faire echouer le traitement du check-in
         logger.exception("gsheets: echec de l'append Donnees")
@@ -101,21 +111,21 @@ def overwrite_sheet(sheet_name, header, rows):
         logger.info("gsheets: desactive — overwrite %s ignore", sheet_name)
         return False
     try:
-        service = _service()
-        service.spreadsheets().values().clear(
-            spreadsheetId=config.GOOGLE_SPREADSHEET_ID, range=f"{sheet_name}!A2:ZZ",
-        ).execute()
-        service.spreadsheets().values().update(
-            spreadsheetId=config.GOOGLE_SPREADSHEET_ID, range=f"{sheet_name}!A1",
-            valueInputOption="RAW", body={"values": [[OVERWRITE_BANNER]]},
-        ).execute()
-        body = {"values": [header] + rows}
-        service.spreadsheets().values().update(
-            spreadsheetId=config.GOOGLE_SPREADSHEET_ID,
-            range=f"{sheet_name}!A2",
-            valueInputOption="RAW",
-            body=body,
-        ).execute()
+        headers = _headers()
+        resp = requests.post(_range_url(sheet_name, "A2:ZZ", ":clear"), headers=headers, json={}, timeout=15)
+        resp.raise_for_status()
+
+        resp = requests.put(
+            _range_url(sheet_name, "A1"), headers=headers,
+            params={"valueInputOption": "RAW"}, json={"values": [[OVERWRITE_BANNER]]}, timeout=15,
+        )
+        resp.raise_for_status()
+
+        resp = requests.put(
+            _range_url(sheet_name, "A2"), headers=headers,
+            params={"valueInputOption": "RAW"}, json={"values": [header] + rows}, timeout=15,
+        )
+        resp.raise_for_status()
         return True
     except Exception:  # noqa: BLE001
         logger.exception("gsheets: echec de l'overwrite %s", sheet_name)
