@@ -501,13 +501,16 @@ def _cb_guide_valider(conn, callback_query, dt):
             return []
         return [{"text": result["message"], "status": "anomaly"}]
 
+    # La carte est reduite a une courte confirmation (boutons retires), et le
+    # rapport complet part comme un NOUVEAU message via le pipeline standard
+    # (_send_one) — c'est ce qui reattache le clavier persistant en bas de
+    # l'ecran : ForceReply l'a masque au debut du flux, et seul un nouveau
+    # sendMessage portant `reply_markup` peut le faire reapparaitre (editer
+    # un message ne touche que son clavier inline, jamais le clavier
+    # persistant du chat).
     if message_id is not None:
-        body = _copyable(result["message"]) if result["status"] == "report" else result["message"]
-        parse_mode = "HTML" if result["status"] == "report" else None
-        _safe_edit_or_send(chat_id, message_id, body, reply_markup=None, parse_mode=parse_mode)
-        messages = []
-    else:
-        messages = [_finalize(result)]
+        _safe_edit_or_send(chat_id, message_id, "✅ Enregistré.", reply_markup=None)
+    messages = [_finalize(result)]
 
     if result.get("pret_a_cloturer"):
         messages.extend(_close_and_build_messages(conn, result["date"], result["poste"], dt))
@@ -731,10 +734,9 @@ def _menu_process_correction_valeur(conn, chat_id, dt, text, sender_id, sender_n
     logic.clear_interaction_state(conn, chat_id, sender_id)
 
     if message_id is not None:
-        body = _copyable(result["message"]) if result["status"] == "report" else result["message"]
-        parse_mode = "HTML" if result["status"] == "report" else None
-        _safe_edit_or_send(chat_id, message_id, body, reply_markup=None, parse_mode=parse_mode)
-        return []
+        # Meme raison qu'en B2 : nouveau message plutot qu'edition finale,
+        # pour reattacher le clavier persistant masque par le ForceReply.
+        _safe_edit_or_send(chat_id, message_id, "✅ Corrigé.", reply_markup=None)
     return [_finalize(result)]
 
 

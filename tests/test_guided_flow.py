@@ -138,10 +138,17 @@ def test_saisie_guidee_happy_path(client):
     assert "à valider" in card["text"]
     assert card["reply_markup"] == client.app_module.keyboards.GUIDE_CONFIRM_KEYBOARD
 
+    client.sent.clear()
     _post_callback(client, "guide_valider", message_id=card["mid"])
+    # La carte est reduite a une courte confirmation (boutons retires)...
+    edited = [e for e in client.sent if e["kind"] == "edit"]
+    assert edited and edited[-1]["mid"] == card["mid"]
+    assert edited[-1]["reply_markup"] is None
+    # ...et le rapport complet part comme NOUVEAU message, avec le clavier
+    # persistant reattache (masque par le ForceReply du debut du flux).
     result = _last(client.sent)
-    assert result["kind"] == "edit" and result["mid"] == card["mid"]
-    assert result["reply_markup"] is None
+    assert result["kind"] == "send"
+    assert result["reply_markup"] == client.app_module.keyboards.MAIN_KEYBOARD
     assert result["parse_mode"] == "HTML"
     assert "Production : 133 pcs" in result["text"]
 
