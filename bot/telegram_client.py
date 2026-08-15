@@ -9,6 +9,25 @@ from . import config
 API_BASE = "https://api.telegram.org/bot{token}"
 
 
+def _endpoint_name(url):
+    """Nom de la methode Telegram appelee, sans le token (jamais expose dans
+    un message d'erreur qui pourrait remonter jusqu'a l'utilisateur)."""
+    return url.rsplit("/", 1)[-1]
+
+
+def _check(resp):
+    """Comme `raise_for_status()`, mais le message d'erreur inclut la
+    `description` renvoyee par Telegram (bien plus utile que le texte
+    generique de `requests` pour diagnostiquer un 400)."""
+    if resp.ok:
+        return resp.json()
+    try:
+        detail = resp.json().get("description", resp.text)
+    except ValueError:
+        detail = resp.text
+    raise RuntimeError(f"Telegram {_endpoint_name(resp.url)} — {resp.status_code} : {detail}")
+
+
 def send_message(chat_id, text, reply_markup=None, parse_mode=None):
     url = f"{API_BASE.format(token=config.BOT_TOKEN)}/sendMessage"
     payload = {"chat_id": chat_id, "text": text}
@@ -17,8 +36,7 @@ def send_message(chat_id, text, reply_markup=None, parse_mode=None):
     if parse_mode is not None:
         payload["parse_mode"] = parse_mode
     resp = requests.post(url, json=payload, timeout=10)
-    resp.raise_for_status()
-    return resp.json()
+    return _check(resp)
 
 
 def send_photo(chat_id, photo_bytes, caption=None, reply_markup=None, parse_mode=None):
@@ -32,8 +50,7 @@ def send_photo(chat_id, photo_bytes, caption=None, reply_markup=None, parse_mode
     if parse_mode is not None:
         data["parse_mode"] = parse_mode
     resp = requests.post(url, data=data, files=files, timeout=30)
-    resp.raise_for_status()
-    return resp.json()
+    return _check(resp)
 
 
 def send_document(chat_id, file_path, caption=None):
@@ -44,8 +61,7 @@ def send_document(chat_id, file_path, caption=None):
         if caption is not None:
             data["caption"] = caption
         resp = requests.post(url, data=data, files=files, timeout=60)
-    resp.raise_for_status()
-    return resp.json()
+    return _check(resp)
 
 
 def edit_message_text(chat_id, message_id, text, reply_markup=None, parse_mode=None):
@@ -60,8 +76,7 @@ def edit_message_text(chat_id, message_id, text, reply_markup=None, parse_mode=N
     resp = requests.post(url, json=payload, timeout=10)
     if resp.status_code == 400 and "message is not modified" in resp.text.lower():
         return {"ok": True, "result": None}
-    resp.raise_for_status()
-    return resp.json()
+    return _check(resp)
 
 
 def edit_message_reply_markup(chat_id, message_id, reply_markup=None):
@@ -72,16 +87,14 @@ def edit_message_reply_markup(chat_id, message_id, reply_markup=None):
     resp = requests.post(url, json=payload, timeout=10)
     if resp.status_code == 400 and "message is not modified" in resp.text.lower():
         return {"ok": True, "result": None}
-    resp.raise_for_status()
-    return resp.json()
+    return _check(resp)
 
 
 def set_my_commands(commands):
     """`commands` : liste de {"command": "start", "description": "..."}."""
     url = f"{API_BASE.format(token=config.BOT_TOKEN)}/setMyCommands"
     resp = requests.post(url, json={"commands": commands}, timeout=10)
-    resp.raise_for_status()
-    return resp.json()
+    return _check(resp)
 
 
 def answer_callback_query(callback_query_id, text=None):
@@ -90,12 +103,10 @@ def answer_callback_query(callback_query_id, text=None):
     if text is not None:
         payload["text"] = text
     resp = requests.post(url, json=payload, timeout=10)
-    resp.raise_for_status()
-    return resp.json()
+    return _check(resp)
 
 
 def set_webhook(webhook_url):
     url = f"{API_BASE.format(token=config.BOT_TOKEN)}/setWebhook"
     resp = requests.post(url, json={"url": webhook_url}, timeout=10)
-    resp.raise_for_status()
-    return resp.json()
+    return _check(resp)

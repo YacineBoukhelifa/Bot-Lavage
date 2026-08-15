@@ -363,6 +363,21 @@ def _cmd_id(chat_id, is_group, sender_id, sender_nom):
 # B2 — saisie guidee : ForceReply + carte de confirmation editable
 # ---------------------------------------------------------------------------
 
+def _safe_edit_or_send(chat_id, message_id, text, reply_markup=None, parse_mode=None):
+    """Tente d'editer `message_id` ; si Telegram refuse l'edition (message
+    trop vieux, deja supprime, etc.), retombe sur un nouvel envoi plutot que
+    de laisser l'exception remonter — sinon la transition d'etat qui suit
+    (set_interaction_state) n'a jamais lieu et l'utilisateur reste bloque
+    avec un etat perime (voir Tache B, bug du 15/08/2026)."""
+    try:
+        telegram_client.edit_message_text(chat_id, message_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
+        return message_id
+    except Exception:  # noqa: BLE001
+        logger.exception("app: edit_message_text a echoue, repli sur un nouvel envoi")
+        resp = telegram_client.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
+        return resp.get("result", {}).get("message_id")
+
+
 def _saisie_prompt_text(heure):
     noms = " · ".join(config.LIGNES[c]["nom_affiche"] for c in config.ORDRE_AFFICHAGE)
     return (
@@ -441,7 +456,7 @@ def _guide_process_cumuls(conn, chat_id, dt, text, sender_id, sender_nom, state)
     card = _guide_confirmation_card(apercu, ctx["heure"])
 
     if message_id is not None:
-        telegram_client.edit_message_text(chat_id, message_id, card, reply_markup=keyboards.GUIDE_CONFIRM_KEYBOARD)
+        message_id = _safe_edit_or_send(chat_id, message_id, card, reply_markup=keyboards.GUIDE_CONFIRM_KEYBOARD)
     else:
         resp = telegram_client.send_message(chat_id, card, reply_markup=keyboards.GUIDE_CONFIRM_KEYBOARD)
         message_id = resp.get("result", {}).get("message_id")
@@ -482,16 +497,14 @@ def _cb_guide_valider(conn, callback_query, dt):
 
     if result["status"] == "anomaly":
         if message_id is not None:
-            telegram_client.edit_message_text(
-                chat_id, message_id, result["message"], reply_markup=keyboards.ANOMALY_KEYBOARD,
-            )
+            _safe_edit_or_send(chat_id, message_id, result["message"], reply_markup=keyboards.ANOMALY_KEYBOARD)
             return []
         return [{"text": result["message"], "status": "anomaly"}]
 
     if message_id is not None:
         body = _copyable(result["message"]) if result["status"] == "report" else result["message"]
         parse_mode = "HTML" if result["status"] == "report" else None
-        telegram_client.edit_message_text(chat_id, message_id, body, reply_markup=None, parse_mode=parse_mode)
+        _safe_edit_or_send(chat_id, message_id, body, reply_markup=None, parse_mode=parse_mode)
         messages = []
     else:
         messages = [_finalize(result)]
@@ -720,7 +733,7 @@ def _menu_process_correction_valeur(conn, chat_id, dt, text, sender_id, sender_n
     if message_id is not None:
         body = _copyable(result["message"]) if result["status"] == "report" else result["message"]
         parse_mode = "HTML" if result["status"] == "report" else None
-        telegram_client.edit_message_text(chat_id, message_id, body, reply_markup=None, parse_mode=parse_mode)
+        _safe_edit_or_send(chat_id, message_id, body, reply_markup=None, parse_mode=parse_mode)
         return []
     return [_finalize(result)]
 
@@ -773,10 +786,21 @@ def handle_message(message, dt):
         sender_id, sender_nom = _sender(message)
         stripped = text.strip()
 
+        # Une commande explicite reprend TOUJOURS la main, meme si un flux
+        # guide attend une reponse — sinon une erreur transitoire au milieu
+        # de la saisie guidee (ex. edit_message_text qui echoue) laisse
+        # l'utilisateur bloque : /saisir, /menu, /recap... seraient avales
+        # comme si c'etait sa reponse au lieu de relancer proprement.
+        m = COMMAND_RE.match(stripped)
+        if m is not None:
+            cmd = m.group(1).lower()
+            rest = (m.group(2) or "").strip()
+            return _dispatch_command(conn, chat_id, is_group, cmd, rest, dt, sender_id, sender_nom)
+
         # Une reponse (reply_to_message) a un message du bot franchit le
-        # privacy mode meme sans "/" (spec bot v2, Tache B) — priorite
-        # absolue sur le parsing de commande tant qu'un flux guide attend
-        # une reponse pour CET utilisateur precis (isolation B4.6).
+        # privacy mode meme sans "/" (spec bot v2, Tache B) — priorite sur
+        # le texte libre tant qu'un flux guide attend une reponse pour CET
+        # utilisateur precis (isolation B4.6).
         if sender_id is not None:
             state = logic.get_interaction_state(conn, chat_id, sender_id, dt)
             if state and state["etat"] == "ATTENTE_CUMULS":
@@ -784,15 +808,9 @@ def handle_message(message, dt):
             if state and state["etat"] == "ATTENTE_CORRECTION_VALEUR":
                 return _menu_process_correction_valeur(conn, chat_id, dt, stripped, sender_id, sender_nom, state)
 
-        m = COMMAND_RE.match(stripped)
-        if m is None:
-            if is_group:
-                return []  # texte libre invisible du bot en groupe (privacy mode) ; on ignore par coherence
-            return _handle_free_checkin(conn, chat_id, dt, stripped, sender_id, sender_nom)
-
-        cmd = m.group(1).lower()
-        rest = (m.group(2) or "").strip()
-        return _dispatch_command(conn, chat_id, is_group, cmd, rest, dt, sender_id, sender_nom)
+        if is_group:
+            return []  # texte libre invisible du bot en groupe (privacy mode) ; on ignore par coherence
+        return _handle_free_checkin(conn, chat_id, dt, stripped, sender_id, sender_nom)
     finally:
         conn.close()
 
