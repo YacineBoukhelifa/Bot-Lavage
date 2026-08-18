@@ -115,8 +115,7 @@ def _push_to_google(conn, date, poste, local_path):
     erreurs = []
 
     rows = conn.execute("SELECT * FROM checkpoints WHERE date=? AND poste=?", (date, poste)).fetchall()
-    for r in rows:
-        gsheets.append_donnees_row(r)
+    gsheets.append_donnees_rows(rows)
 
     year, month = int(date.split("-")[0]), int(date.split("-")[1])
     gsheets.overwrite_sheet(
@@ -904,6 +903,19 @@ def _send_one(chat_id, msg):
     telegram_client.send_message(chat_id, body, reply_markup=markup, parse_mode=parse_mode)
 
 
+def _send_all(chat_id, messages):
+    """Envoie chaque message independamment : l'echec de l'un (reseau,
+    Telegram temporairement indisponible...) ne doit jamais empecher les
+    suivants de partir — une cloture de poste envoie plusieurs messages
+    (synthese, graphique, alertes) et perdre les derniers a cause du
+    premier serait pire que d'en perdre un seul."""
+    for msg in messages or []:
+        try:
+            _send_one(chat_id, msg)
+        except Exception:  # noqa: BLE001
+            logger.exception("app: envoi d'un message a echoue")
+
+
 def _run_opportunistic_closures(now, fallback_chat_id):
     """A chaque webhook, verifie si un poste actif a depasse son heure de
     fin sans avoir ete cloture (spec v2 §5.1) — voir DEPLOY.md pour le
@@ -912,8 +924,7 @@ def _run_opportunistic_closures(now, fallback_chat_id):
     try:
         target = config.GROUPE_AUTORISE or fallback_chat_id
         for date, poste in logic.postes_a_cloturer_automatiquement(conn, now):
-            for msg in _close_and_build_messages(conn, date, poste, now):
-                _send_one(target, msg)
+            _send_all(target, _close_and_build_messages(conn, date, poste, now))
     except Exception:  # noqa: BLE001 - ne doit jamais faire echouer la reponse au webhook
         logger.exception("app: verification opportuniste de cloture echouee")
     finally:
@@ -930,13 +941,24 @@ def webhook():
         # callback_query n'a pas d'horodatage propre (celui de .message est
         # celui du message d'origine, perime) -> horloge reelle ici.
         now = datetime.now(ALGIERS_TZ)
+        # Repondu EN PREMIER, protege par try/except : Telegram invalide un
+        # callback apres quelques secondes ("query is too old"), et une
+        # cloture de poste (rapport + graphique + Excel + Sheets/Drive) peut
+        # facilement depasser ce delai sur PythonAnywhere gratuit. Si cet
+        # appel n'etait pas protege ET place apres le traitement (comme
+        # avant ce correctif), son echec faisait planter toute la reponse
+        # AVANT que les messages construits par handle_callback ne soient
+        # jamais envoyes — la synthese entiere partait silencieusement a la
+        # poubelle (bug constate le 18/08/2026).
+        try:
+            telegram_client.answer_callback_query(callback_query["id"])
+        except Exception:  # noqa: BLE001
+            logger.exception("app: answer_callback_query a echoue (callback perime ?)")
         try:
             messages = handle_callback(callback_query, now)
         except Exception as exc:  # noqa: BLE001 - le bot doit toujours repondre
             messages = [{"text": f"❌ Erreur interne : {exc}", "status": "error"}]
-        telegram_client.answer_callback_query(callback_query["id"])
-        for msg in messages:
-            _send_one(chat_id, msg)
+        _send_all(chat_id, messages)
         _run_opportunistic_closures(now, chat_id)
         return jsonify({"ok": True})
 
@@ -952,8 +974,7 @@ def webhook():
     except Exception as exc:  # noqa: BLE001 - le bot doit toujours repondre
         messages = [{"text": f"❌ Erreur interne lors du traitement du message : {exc}", "status": "error"}]
 
-    for msg in messages or []:
-        _send_one(chat_id, msg)
+    _send_all(chat_id, messages)
 
     # Cle sur l'horodatage du message plutot que sur l'horloge reelle : en
     # webhook les deux coincident (Telegram livre en quasi temps reel), et

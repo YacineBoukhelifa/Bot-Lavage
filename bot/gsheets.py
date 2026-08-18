@@ -84,24 +84,38 @@ def _ensure_donnees_header(headers):
         resp.raise_for_status()
 
 
-def append_donnees_row(checkpoint_row):
-    """Ajoute une ligne à l'onglet Donnees (append incrémental, §7.5c)."""
+def append_donnees_rows(checkpoint_rows):
+    """Ajoute plusieurs lignes à l'onglet Donnees en UN seul appel HTTP
+    (append incrémental, §7.5c). A la cloture d'un poste, jusqu'à ~27
+    lignes (9 points × 3 lignes) attendent d'être poussées : les envoyer
+    une par une multipliait les allers-retours réseau au point de risquer
+    de dépasser le délai de validité d'un callback Telegram (~template
+    "query is too old" côté PythonAnywhere gratuit, bug constaté le
+    18/08/2026)."""
     if not config.GOOGLE_ENABLED or not config.GOOGLE_SPREADSHEET_ID:
         logger.info("gsheets: desactive (pas de service account/spreadsheet configure) — append ignore")
         return False
+    if not checkpoint_rows:
+        return True
     try:
         headers = _headers()
         _ensure_donnees_header(headers)
         resp = requests.post(
             _range_url("Donnees", "A1", ":append"), headers=headers,
             params={"valueInputOption": "RAW", "insertDataOption": "INSERT_ROWS"},
-            json={"values": [_row_from_checkpoint(checkpoint_row)]}, timeout=15,
+            json={"values": [_row_from_checkpoint(r) for r in checkpoint_rows]}, timeout=20,
         )
         resp.raise_for_status()
         return True
     except Exception:  # noqa: BLE001 - ne doit jamais faire echouer le traitement du check-in
         logger.exception("gsheets: echec de l'append Donnees")
         return False
+
+
+def append_donnees_row(checkpoint_row):
+    """Ajoute une seule ligne — cf. `append_donnees_rows` pour le cas
+    (plus courant, a la cloture) de plusieurs lignes en un appel."""
+    return append_donnees_rows([checkpoint_row])
 
 
 def overwrite_sheet(sheet_name, header, rows):
