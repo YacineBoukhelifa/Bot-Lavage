@@ -112,11 +112,33 @@ def point_coef(poste, heure):
     return _points(poste)[_point_index(poste, heure)]["coef"]
 
 
-def objectif_point(poste, code, heure):
+def resolved_coef(poste, code, heure, conn=None, date=None):
+    """Coefficient effectif d'un point de controle. Pour le poste 1, aux
+    points 12:00/13:00, la pause dejeuner peut avoir ete deplacee au 12:00
+    pour une ligne donnee (question Oui/Non posee en saisie guidee) — dans
+    ce cas le coef 0.5 suit la ligne plutot que de rester fixe au point
+    13:00 (comportement historique, toujours le defaut quand aucune
+    decision n'a ete enregistree ou que `conn`/`date` ne sont pas fournis,
+    ce qui preserve tous les appels existants)."""
+    if poste == 1 and heure in ("12:00", "13:00") and conn is not None and date is not None:
+        cible = get_pause_dejeuner(conn, date, code)
+        return 0.5 if heure == cible else 1.0
+    return point_coef(poste, heure)
+
+
+def objectif_point(poste, code, heure, conn=None, date=None):
     """Objectif arrondi a l'entier inferieur pour ce point de controle
-    (spec v2 §3.4) : floor(objectif_horaire_ligne * coef_du_point)."""
-    objectif_horaire = config.LIGNES[code]["objectif_horaire"]
-    coef = point_coef(poste, heure)
+    (spec v2 §3.4) : floor(objectif_horaire_ligne * coef_du_point).
+
+    `conn`/`date` optionnels : quand fournis, l'objectif horaire vient des
+    objectifs saisis en debut de shift (`objectifs_jour`) plutot que des
+    constantes fixes de `config.LIGNES`, et le coefficient tient compte de
+    la pause dejeuner dynamique (`resolved_coef`)."""
+    if conn is not None and date is not None:
+        objectif_horaire = get_objectif_horaire(conn, date, poste, code)
+    else:
+        objectif_horaire = config.LIGNES[code]["objectif_horaire"]
+    coef = resolved_coef(poste, code, heure, conn, date)
     return math.floor(objectif_horaire * coef)
 
 
@@ -185,6 +207,61 @@ def get_poste(conn, date, poste):
 
 def get_poste_state(conn):
     return conn.execute("SELECT * FROM poste_state WHERE id = 1").fetchone()
+
+
+# ---------------------------------------------------------------------------
+# Objectifs journaliers (saisis en debut de shift) et pause dejeuner
+# dynamique par ligne (poste 1 uniquement)
+# ---------------------------------------------------------------------------
+
+def get_objectif_horaire(conn, date, poste, code):
+    row = conn.execute(
+        "SELECT objectif_horaire FROM objectifs_jour WHERE date = ? AND poste = ? AND code = ?",
+        (date, poste, code),
+    ).fetchone()
+    if row is not None:
+        return row["objectif_horaire"]
+    return config.LIGNES[code]["objectif_horaire"]
+
+
+def set_objectifs_jour(conn, date, poste, valeurs):
+    """`valeurs` : dict code -> objectif_horaire. Un code absent garde le
+    defaut `config.LIGNES` (via `get_objectif_horaire`)."""
+    for code, objectif_horaire in valeurs.items():
+        conn.execute(
+            "INSERT INTO objectifs_jour (date, poste, code, objectif_horaire) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(date, poste, code) DO UPDATE SET objectif_horaire=excluded.objectif_horaire",
+            (date, poste, code, objectif_horaire),
+        )
+    conn.commit()
+
+
+def get_pause_dejeuner(conn, date, code):
+    """Heure du point de controle qui porte le coef pause dejeuner (0.5)
+    pour cette ligne, poste 1. Defaut "13:00" — comportement historique
+    quand aucune decision n'a ete enregistree."""
+    row = conn.execute(
+        "SELECT heure_pause FROM pause_dejeuner WHERE date = ? AND poste = 1 AND code = ?",
+        (date, code),
+    ).fetchone()
+    return row["heure_pause"] if row is not None else "13:00"
+
+
+def set_pause_dejeuner(conn, date, code, heure_pause):
+    conn.execute(
+        "INSERT INTO pause_dejeuner (date, poste, code, heure_pause) VALUES (?, 1, ?, ?) "
+        "ON CONFLICT(date, poste, code) DO UPDATE SET heure_pause=excluded.heure_pause",
+        (date, code, heure_pause),
+    )
+    conn.commit()
+
+
+def pause_decisions_completes(conn, date):
+    rows = conn.execute(
+        "SELECT code FROM pause_dejeuner WHERE date = ? AND poste = 1", (date,)
+    ).fetchall()
+    codes_decides = {r["code"] for r in rows}
+    return set(config.ORDRE_AFFICHAGE) <= codes_decides
 
 
 def start_day(conn, date, dt=None):
@@ -301,14 +378,23 @@ def is_poste_pret_a_cloturer(conn, date, poste):
 
 
 def postes_a_cloturer_automatiquement(conn, dt):
-    """Liste des (date, poste) dont l'heure de fin est depassee, actifs, et
-    dont la synthese n'a pas encore ete envoyee — verifie a chaque webhook
-    en l'absence de cron externe fiable (voir DEPLOY.md)."""
+    """Liste des (date, poste) dont l'heure de fin est depassee (au-dela de
+    la meme tolerance que `snap_to_checkpoint`/`resolve_production_context`
+    autour du point final), actifs, et dont la synthese n'a pas encore ete
+    envoyee — verifie a chaque webhook en l'absence de cron externe fiable
+    (voir DEPLOY.md).
+
+    La tolerance est necessaire : sans elle, un `/saisir` envoye pile a
+    l'heure de fin (avant que l'utilisateur n'ait eu le temps de repondre
+    avec ses chiffres) declenchait cette cloture opportuniste — avec
+    "cumul final non saisi" — avant meme que la reponse guidee n'arrive,
+    qui se voyait alors rejetee avec "aucun poste actif" (bug constate en
+    ecrivant les tests du point final, 18/08/2026)."""
     resultats = []
 
     date1 = dt.strftime("%Y-%m-%d")
     poste1 = get_poste(conn, date1, 1)
-    fin1_min = _to_minutes(config.POSTE_1["fin"])
+    fin1_min = _to_minutes(config.POSTE_1["fin"]) + config.POSTE_1["tolerance_minutes"]
     now_min = dt.hour * 60 + dt.minute
     if (
         poste1 is not None
@@ -322,7 +408,7 @@ def postes_a_cloturer_automatiquement(conn, dt):
     if state["poste2_ouvert"]:
         date2 = state["poste2_date"]
         poste2 = get_poste(conn, date2, 2)
-        fin2_min = _to_minutes(config.POSTE_2["fin"])
+        fin2_min = _to_minutes(config.POSTE_2["fin"]) + config.POSTE_2["tolerance_minutes"]
         depasse = dt.strftime("%Y-%m-%d") > date2 and now_min >= fin2_min
         if (
             poste2 is not None
@@ -387,8 +473,8 @@ def save_checkpoint(
     conn, date, poste, code, heure, cumul_nouveau, horodatage_reel, cumul_precedent,
     saisi_par_id=None, saisi_par_nom=None,
 ):
-    coef = point_coef(poste, heure)
-    objectif = objectif_point(poste, code, heure)
+    coef = resolved_coef(poste, code, heure, conn, date)
+    objectif = objectif_point(poste, code, heure, conn, date)
     production = cumul_nouveau - cumul_precedent
     ecart = production - objectif
     ecart_pct = (ecart / objectif * 100) if objectif else None
@@ -647,7 +733,7 @@ def preview_checkin(conn, date, poste, heure, valeurs):
         cumul_nouveau = valeurs[code]
         cumul_precedent = get_cumul_precedent(conn, date, poste, code, heure)
         production = cumul_nouveau - cumul_precedent
-        objectif = objectif_point(poste, code, heure)
+        objectif = objectif_point(poste, code, heure, conn, date)
         pct = (production / objectif * 100) if objectif else None
         lignes.append({
             "code": code,

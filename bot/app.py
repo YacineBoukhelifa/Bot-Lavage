@@ -20,14 +20,16 @@ HELP_TEXT = (
     "🤖 Bot rapport horaire — BU Lavage\n\n"
     "📥 Saisir — saisie guidée : le bot demande le point de contrôle, "
     "vous répondez juste par 3 chiffres\n"
-    "📊 Récap — cumuls actuels du poste en cours\n"
+    "📊 Récap — cumuls actuels du shift en cours\n"
     "📈 Graphique — graphique de la journée en cours\n"
-    "⚙️ Menu — démarrer/clôturer le poste, ouvrir le poste 2, corriger "
+    "⚙️ Menu — démarrer/clôturer le shift, ouvrir le shift 2, corriger "
     "une saisie, lien du fichier, aide\n\n"
     "Ordre des lignes en saisie guidée : Auto · Semi-auto · Ligne 03 "
-    "(exemple : 800 660 90 — tapez « - » pour une ligne à l'arrêt).\n\n"
+    "(exemple : 800 660 90 — tapez « - » pour une ligne à l'arrêt). En "
+    "début de shift, le bot demande d'abord les objectifs horaires du "
+    "jour (mêmes 3 valeurs, exemple : 133 160 80).\n\n"
     "Les commandes texte restent disponibles pour un usage rapide : "
-    "/start_day, /poste2, /prod a=800 s=660 l3=90, /a /s /l3, "
+    "/start_day, /shift2, /prod a=800 s=660 l3=90, /a /s /l3, "
     "/corriger HH:MM code=valeur, /fin, /recap, /graph, /export, /id.\n\n"
     "En chat privé, le format libre (une ligne \"CODE valeur\" par ligne) "
     "reste accepté en plus des boutons et des commandes."
@@ -173,9 +175,9 @@ def _finalize(result):
 def _process_and_dispatch(conn, chat_id, dt, valeurs, non_reconnues, malformees, sender_id, sender_nom):
     ctx = logic.resolve_production_context(conn, dt)
     if ctx.get("poste2_ferme"):
-        return [{"text": "⛔ Poste 2 non ouvert — lancer /poste2 pour l'activer.", "status": "error"}]
+        return [{"text": "⛔ Shift 2 non ouvert — lancer /shift2 pour l'activer.", "status": "error"}]
     if ctx["date"] is None:
-        return [{"text": "Aucun poste actif. Envoyez /start_day pour démarrer.", "status": "error"}]
+        return [{"text": "Aucun shift actif. Envoyez /start_day pour démarrer.", "status": "error"}]
 
     result = logic.process_checkin_values(
         conn, str(chat_id), ctx["date"], ctx["poste"], dt, valeurs, non_reconnues, malformees,
@@ -215,33 +217,62 @@ def _current_context_readonly(conn, dt):
     return dt.strftime("%Y-%m-%d"), 1
 
 
-def _cmd_start_day(conn, is_group, dt, sender_id):
+def _objectifs_prompt_text():
+    noms = " · ".join(config.LIGNES[c]["nom_affiche"] for c in config.ORDRE_AFFICHAGE)
+    defauts = " ".join(str(config.LIGNES[c]["objectif_horaire"]) for c in config.ORDRE_AFFICHAGE)
+    return (
+        f"🎯 Objectifs horaires du jour\n"
+        f"Envoyez les objectifs dans l'ordre :\n{noms}\n"
+        f"Exemple : {defauts}\n"
+        f"Tapez « - » pour garder l'objectif habituel d'une ligne."
+    )
+
+
+def _cmd_start_day(conn, chat_id, is_group, dt, sender_id):
     if is_group and not _can_saisir(sender_id):
         return DENIED_SAISIE
-    date = dt.strftime("%Y-%m-%d")
+    resp = telegram_client.send_message(chat_id, _objectifs_prompt_text(), reply_markup=FORCE_REPLY)
+    message_id = resp.get("result", {}).get("message_id")
+    logic.set_interaction_state(
+        conn, chat_id, sender_id, "ATTENTE_OBJECTIFS_JOUR", {"action": "start_day"}, dt, message_id,
+    )
+    return []
+
+
+def _finalize_start_day(conn, date, dt, valeurs):
     result = logic.start_day(conn, date, dt)
+    logic.set_objectifs_jour(conn, date, 1, valeurs)
     messages = []
     if result["poste2_cloture_auto"]:
         stats = result["poste2_cloture_auto"]
         text = (
-            "⚠️ Le poste 2 de la veille n'avait pas été clôturé à temps — "
+            "⚠️ Le shift 2 de la veille n'avait pas été clôturé à temps — "
             "clôture automatique :\n\n" + logic.format_synthese(stats)
         )
         messages.append({"text": text, "status": "report", "photo": _safe_graph(stats)})
     messages.append({
-        "text": f"✅ Poste 1 démarré pour le {dt.strftime('%d/%m/%Y')}. Cumuls remis à 0.",
+        "text": f"✅ Shift 1 démarré pour le {dt.strftime('%d/%m/%Y')}. Cumuls remis à 0.",
         "status": "info",
     })
     return messages
 
 
-def _cmd_poste2(conn, is_group, dt, sender_id):
+def _cmd_poste2(conn, chat_id, is_group, dt, sender_id):
     if is_group and not _can_saisir(sender_id):
         return DENIED_SAISIE
-    date = dt.strftime("%Y-%m-%d")
+    resp = telegram_client.send_message(chat_id, _objectifs_prompt_text(), reply_markup=FORCE_REPLY)
+    message_id = resp.get("result", {}).get("message_id")
+    logic.set_interaction_state(
+        conn, chat_id, sender_id, "ATTENTE_OBJECTIFS_JOUR", {"action": "poste2"}, dt, message_id,
+    )
+    return []
+
+
+def _finalize_poste2(conn, date, dt, valeurs):
     logic.open_poste2(conn, date, dt)
+    logic.set_objectifs_jour(conn, date, 2, valeurs)
     return [{
-        "text": f"✅ Poste 2 activé pour le {dt.strftime('%d/%m/%Y')} (16:30 → 00:30). Cumuls repartis à 0.",
+        "text": f"✅ Shift 2 activé pour le {dt.strftime('%d/%m/%Y')} (16:30 → 00:30). Cumuls repartis à 0.",
         "status": "info",
     }]
 
@@ -256,7 +287,7 @@ def _cmd_fin(conn, is_group, dt, sender_id):
     poste1 = logic.get_poste(conn, date, 1)
     if poste1 is not None and poste1["statut"] == "actif":
         return _close_and_build_messages(conn, date, 1, dt)
-    return [{"text": "Aucun poste actif à clôturer.", "status": "error"}]
+    return [{"text": "Aucun shift actif à clôturer.", "status": "error"}]
 
 
 def _cmd_single_line(conn, chat_id, is_group, dt, cmd, rest, sender_id, sender_nom):
@@ -395,9 +426,9 @@ def _cmd_saisir(conn, chat_id, is_group, dt, sender_id, sender_nom):
 
     ctx = logic.resolve_production_context(conn, dt)
     if ctx.get("poste2_ferme"):
-        return [{"text": "⛔ Poste 2 non ouvert — ouvrez-le depuis ⚙️ Menu.", "status": "error"}]
+        return [{"text": "⛔ Shift 2 non ouvert — ouvrez-le depuis ⚙️ Menu.", "status": "error"}]
     if ctx["date"] is None:
-        return [{"text": "Aucun poste actif. Démarrez la journée depuis ⚙️ Menu.", "status": "error"}]
+        return [{"text": "Aucun shift actif. Démarrez la journée depuis ⚙️ Menu.", "status": "error"}]
 
     snap = logic.snap_to_checkpoint(dt, ctx["poste"])
     if snap["matched"] is None:
@@ -407,6 +438,9 @@ def _cmd_saisir(conn, chat_id, is_group, dt, sender_id, sender_nom):
             "status": "error",
         }]
     heure = snap["matched"]
+
+    if heure == "12:00" and ctx["poste"] == 1 and not logic.pause_decisions_completes(conn, ctx["date"]):
+        return _start_pause_dejeuner_flow(conn, chat_id, ctx["date"], dt, sender_id)
 
     resp = telegram_client.send_message(chat_id, _saisie_prompt_text(heure), reply_markup=FORCE_REPLY)
     message_id = resp.get("result", {}).get("message_id")
@@ -545,6 +579,111 @@ def _cb_guide_corriger(conn, callback_query, dt):
 
 
 # ---------------------------------------------------------------------------
+# Objectifs journaliers : demandes en debut de chaque shift (ForceReply),
+# avant que la saisie guidee normale ne demarre.
+# ---------------------------------------------------------------------------
+
+def _guide_process_objectifs(conn, chat_id, dt, text, sender_id, state):
+    ctx = state["contexte"]
+    tokens = text.strip().split()
+
+    if len(tokens) != len(config.ORDRE_AFFICHAGE):
+        return [{
+            "text": (
+                f"Format invalide. Envoyez {len(config.ORDRE_AFFICHAGE)} valeurs séparées par un "
+                f"espace (ex. 133 160 80), ou « - » pour garder l'objectif habituel d'une ligne."
+            ),
+            "status": "error",
+        }]
+
+    valeurs = {}
+    for code, token in zip(config.ORDRE_AFFICHAGE, tokens):
+        if token == "-":
+            continue
+        if not VALEUR_RE.match(token):
+            return [{"text": f"Valeur invalide : « {token} ». Utilisez des nombres ou « - ».", "status": "error"}]
+        valeurs[code] = float(token.replace(",", "."))
+
+    logic.clear_interaction_state(conn, chat_id, sender_id)
+    date = dt.strftime("%Y-%m-%d")
+    if ctx["action"] == "poste2":
+        return _finalize_poste2(conn, date, dt, valeurs)
+    return _finalize_start_day(conn, date, dt, valeurs)
+
+
+# ---------------------------------------------------------------------------
+# Pause dejeuner dynamique par ligne (poste 1, point 12:00) : question
+# Oui/Non posee pour chaque ligne avant la saisie normale du point.
+# ---------------------------------------------------------------------------
+
+def _pause_dejeuner_question_text(code):
+    nom = config.LIGNES[code]["nom_affiche"]
+    return f"🍽️ Point 12:00 — la ligne {nom} est-elle en pause déjeuner cette heure-ci (11:00-12:00) ?"
+
+
+def _start_pause_dejeuner_flow(conn, chat_id, date, dt, sender_id):
+    decidees = {
+        r["code"] for r in conn.execute(
+            "SELECT code FROM pause_dejeuner WHERE date = ? AND poste = 1", (date,),
+        ).fetchall()
+    }
+    restants = [c for c in config.ORDRE_AFFICHAGE if c not in decidees]
+    resp = telegram_client.send_message(
+        chat_id, _pause_dejeuner_question_text(restants[0]), reply_markup=keyboards.pause_dejeuner_keyboard(),
+    )
+    message_id = resp.get("result", {}).get("message_id")
+    logic.set_interaction_state(
+        conn, chat_id, sender_id, "ATTENTE_PAUSE_DEJEUNER",
+        {"date": date, "poste": 1, "codes_restants": restants}, dt, message_id,
+    )
+    return []
+
+
+def _cb_pause_dejeuner(conn, callback_query, dt, reponse):
+    message = callback_query["message"]
+    chat_id = message["chat"]["id"]
+    sender_id, _ = _sender_from_callback(callback_query)
+    if _is_group(message) and not _can_saisir(sender_id):
+        return [{"text": "🚫 Non autorisé à saisir.", "status": "error"}]
+
+    state = logic.get_interaction_state(conn, chat_id, sender_id, dt)
+    if (
+        state is None or state["etat"] != "ATTENTE_PAUSE_DEJEUNER"
+        or state["message_id"] != message.get("message_id")
+    ):
+        return [{"text": "⏱️ Session expirée. Relancez avec 📥 Saisir.", "status": "error"}]
+
+    ctx = state["contexte"]
+    code = ctx["codes_restants"][0]
+    cible = "12:00" if reponse == "oui" else "13:00"
+    logic.set_pause_dejeuner(conn, ctx["date"], code, cible)
+
+    restants = ctx["codes_restants"][1:]
+    if restants:
+        _safe_edit_or_send(
+            chat_id, message["message_id"], _pause_dejeuner_question_text(restants[0]),
+            reply_markup=keyboards.pause_dejeuner_keyboard(),
+        )
+        logic.set_interaction_state(
+            conn, chat_id, sender_id, "ATTENTE_PAUSE_DEJEUNER",
+            {"date": ctx["date"], "poste": 1, "codes_restants": restants}, dt, message["message_id"],
+        )
+        return []
+
+    # Les 3 lignes sont decidees -> on enchaine directement sur la saisie
+    # normale du point 12:00 (meme motif que _cb_guide_corriger : edition +
+    # nouveau sendMessage ForceReply).
+    _safe_edit_or_send(chat_id, message["message_id"], "✅ Pauses déjeuner enregistrées.", reply_markup=None)
+    resp = telegram_client.send_message(chat_id, _saisie_prompt_text("12:00"), reply_markup=FORCE_REPLY)
+    new_message_id = resp.get("result", {}).get("message_id")
+    logic.set_interaction_state(
+        conn, chat_id, sender_id, "ATTENTE_CUMULS",
+        {"poste": 1, "date": ctx["date"], "heure": "12:00"}, dt, new_message_id,
+    )
+    return []
+
+
+# ---------------------------------------------------------------------------
 # B3 — menu secondaire (actions ponctuelles, tout par boutons)
 # ---------------------------------------------------------------------------
 
@@ -561,7 +700,7 @@ def _cb_menu_start_day(callback_query):
         return [{"text": "🚫 Non autorisé à saisir.", "status": "error"}]
     telegram_client.edit_message_text(
         chat_id, message["message_id"],
-        "⚠️ Démarrer une nouvelle journée ? Les cumuls du poste 1 seront remis à zéro.",
+        "⚠️ Démarrer une nouvelle journée ? Les cumuls du shift 1 seront remis à zéro.",
         reply_markup=keyboards.confirm_action_keyboard("start_day"),
     )
     return []
@@ -574,7 +713,7 @@ def _cb_menu_fin(callback_query):
     if _is_group(message) and not _can_saisir(sender_id):
         return [{"text": "🚫 Non autorisé à saisir.", "status": "error"}]
     telegram_client.edit_message_text(
-        chat_id, message["message_id"], "⚠️ Clôturer le poste en cours maintenant ?",
+        chat_id, message["message_id"], "⚠️ Clôturer le shift en cours maintenant ?",
         reply_markup=keyboards.confirm_action_keyboard("fin"),
     )
     return []
@@ -587,7 +726,7 @@ def _cb_menu_poste2(conn, callback_query, dt):
     sender_id, _ = _sender_from_callback(callback_query)
     if is_group and not _can_saisir(sender_id):
         return [{"text": "🚫 Non autorisé à saisir.", "status": "error"}]
-    result_messages = _cmd_poste2(conn, is_group, dt, sender_id)
+    result_messages = _cmd_poste2(conn, chat_id, is_group, dt, sender_id)
     telegram_client.edit_message_text(chat_id, message["message_id"], "✅ Terminé.", reply_markup=None)
     return result_messages
 
@@ -601,7 +740,7 @@ def _cb_confirm_action(conn, callback_query, dt, action):
         return [{"text": "🚫 Non autorisé à saisir.", "status": "error"}]
 
     if action == "start_day":
-        result_messages = _cmd_start_day(conn, is_group, dt, sender_id)
+        result_messages = _cmd_start_day(conn, chat_id, is_group, dt, sender_id)
     elif action == "fin":
         result_messages = _cmd_fin(conn, is_group, dt, sender_id)
     else:
@@ -745,9 +884,9 @@ def _dispatch_command(conn, chat_id, is_group, cmd, rest, dt, sender_id, sender_
     if cmd == "menu":
         return _cmd_menu(chat_id)
     if cmd == "start_day":
-        return _cmd_start_day(conn, is_group, dt, sender_id)
-    if cmd == "poste2":
-        return _cmd_poste2(conn, is_group, dt, sender_id)
+        return _cmd_start_day(conn, chat_id, is_group, dt, sender_id)
+    if cmd in ("poste2", "shift2"):
+        return _cmd_poste2(conn, chat_id, is_group, dt, sender_id)
     if cmd == "prod":
         return _cmd_prod(conn, chat_id, is_group, dt, rest, sender_id, sender_nom)
     if cmd.upper() in config.CODES_ACCEPTES:
@@ -808,6 +947,8 @@ def handle_message(message, dt):
                 return _guide_process_cumuls(conn, chat_id, dt, stripped, sender_id, sender_nom, state)
             if state and state["etat"] == "ATTENTE_CORRECTION_VALEUR":
                 return _menu_process_correction_valeur(conn, chat_id, dt, stripped, sender_id, sender_nom, state)
+            if state and state["etat"] == "ATTENTE_OBJECTIFS_JOUR":
+                return _guide_process_objectifs(conn, chat_id, dt, stripped, sender_id, state)
 
         if is_group:
             return []  # texte libre invisible du bot en groupe (privacy mode) ; on ignore par coherence
@@ -857,6 +998,8 @@ def handle_callback(callback_query, dt):
         if data.startswith("corr_ligne|"):
             _, heure, code = data.split("|", 2)
             return _cb_corr_ligne(conn, callback_query, dt, heure, code)
+        if data.startswith("pause_dej|"):
+            return _cb_pause_dejeuner(conn, callback_query, dt, data.split("|", 1)[1])
         return [{"text": "Action inconnue.", "status": "error"}]
     finally:
         conn.close()

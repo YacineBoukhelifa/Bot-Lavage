@@ -63,9 +63,9 @@ GUIDE_CONFIRM_KEYBOARD = {
 MENU_KEYBOARD = {
     "inline_keyboard": [
         [{"text": "▶️ Démarrer la journée", "callback_data": "menu_start_day"}],
-        [{"text": "🌙 Ouvrir le poste 2", "callback_data": "menu_poste2"}],
+        [{"text": "🌙 Ouvrir le shift 2", "callback_data": "menu_poste2"}],
         [{"text": "✏️ Corriger une saisie", "callback_data": "menu_corriger"}],
-        [{"text": "🏁 Clôturer le poste", "callback_data": "menu_fin"}],
+        [{"text": "🏁 Clôturer le shift", "callback_data": "menu_fin"}],
         [{"text": "📄 Lien du fichier", "callback_data": "menu_export"}],
         [{"text": "❓ Aide", "callback_data": "menu_aide"}],
     ]
@@ -101,3 +101,16 @@ def lignes_keyboard(heure, lignes):
     ]
     rows.append([{"text": "◀️ Retour", "callback_data": "menu_corriger"}])
     return {"inline_keyboard": rows}
+
+
+def pause_dejeuner_keyboard():
+    """Question Oui/Non posee par ligne au point 12:00 du poste 1, pour
+    savoir si c'est l'heure de la pause dejeuner de cette ligne."""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Oui", "callback_data": "pause_dej|oui"},
+                {"text": "❌ Non", "callback_data": "pause_dej|non"},
+            ]
+        ]
+    }

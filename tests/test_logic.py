@@ -64,6 +64,68 @@ def test_objectif_point_poste2_pause_repas():
     assert logic.objectif_point(2, "SKD", "19:30") == 40
 
 
+# --- Objectifs journaliers configurables par shift ----------------------------
+
+def test_objectif_point_sans_conn_date_ignore_objectifs_jour(conn):
+    date = "2026-08-14"
+    logic.set_objectifs_jour(conn, date, 1, {"A": 150})
+    # Pas de conn/date fournis -> comportement historique inchange (config.LIGNES).
+    assert logic.objectif_point(1, "A", "09:00") == 133
+
+
+def test_objectif_point_utilise_objectif_jour_custom(conn):
+    date = "2026-08-14"
+    logic.set_objectifs_jour(conn, date, 1, {"A": 150, "S": 170, "SKD": 90})
+    assert logic.objectif_point(1, "A", "09:00", conn, date) == 150
+    assert logic.objectif_point(1, "S", "09:00", conn, date) == 170
+    assert logic.objectif_point(1, "SKD", "09:00", conn, date) == 90
+
+
+def test_objectif_point_objectif_jour_fallback_sans_saisie(conn):
+    date = "2026-08-14"
+    # Rien saisi pour ce (date, poste) -> repli sur config.LIGNES malgre
+    # conn/date fournis.
+    assert logic.objectif_point(1, "A", "09:00", conn, date) == 133
+
+
+def test_objectif_point_objectif_jour_scope_par_poste(conn):
+    date = "2026-08-14"
+    logic.set_objectifs_jour(conn, date, 2, {"A": 150})
+    # L'objectif du poste 2 ne doit pas deteindre sur le poste 1.
+    assert logic.objectif_point(1, "A", "09:00", conn, date) == 133
+    assert logic.objectif_point(2, "A", "19:30", conn, date) == 75  # 150*0.5=75
+
+
+# --- Pause dejeuner dynamique par ligne (poste 1, points 12:00/13:00) --------
+
+def test_pause_dejeuner_defaut_historique_sans_decision(conn):
+    date = "2026-08-14"
+    assert logic.get_pause_dejeuner(conn, date, "A") == "13:00"
+    assert logic.objectif_point(1, "A", "12:00", conn, date) == 133  # coef 1.0
+    assert logic.objectif_point(1, "A", "13:00", conn, date) == 66  # coef 0.5 (defaut)
+
+
+def test_pause_dejeuner_deplacee_a_12h_pour_une_ligne(conn):
+    date = "2026-08-14"
+    logic.set_pause_dejeuner(conn, date, "A", "12:00")
+    # La ligne A bascule sa pause au point 12:00...
+    assert logic.objectif_point(1, "A", "12:00", conn, date) == 66  # coef 0.5
+    assert logic.objectif_point(1, "A", "13:00", conn, date) == 133  # coef 1.0
+    # ...les autres lignes, non decidees, gardent le defaut a 13:00.
+    assert logic.objectif_point(1, "S", "12:00", conn, date) == 160
+    assert logic.objectif_point(1, "S", "13:00", conn, date) == 80
+
+
+def test_pause_decisions_completes(conn):
+    date = "2026-08-14"
+    assert logic.pause_decisions_completes(conn, date) is False
+    logic.set_pause_dejeuner(conn, date, "A", "12:00")
+    logic.set_pause_dejeuner(conn, date, "S", "13:00")
+    assert logic.pause_decisions_completes(conn, date) is False
+    logic.set_pause_dejeuner(conn, date, "SKD", "13:00")
+    assert logic.pause_decisions_completes(conn, date) is True
+
+
 # --- Time snapping par poste --------------------------------------------------
 
 def test_snap_poste1_exact_and_tolerance():

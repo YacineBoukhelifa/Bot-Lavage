@@ -22,21 +22,31 @@ def client(tmp_path, monkeypatch):
     app_module.db.init_db()
 
     sent = []
+    next_id = [1]
 
     def fake_send_message(chat_id, text, reply_markup=None, parse_mode=None):
+        mid = next_id[0]
+        next_id[0] += 1
         sent.append({
             "kind": "text", "chat_id": chat_id, "text": text,
             "reply_markup": reply_markup, "parse_mode": parse_mode,
         })
+        return {"ok": True, "result": {"message_id": mid}}
 
     def fake_send_photo(chat_id, photo_bytes, caption=None, reply_markup=None, parse_mode=None):
+        mid = next_id[0]
+        next_id[0] += 1
         sent.append({
             "kind": "photo", "chat_id": chat_id, "text": caption, "caption": caption,
             "size": len(photo_bytes), "parse_mode": parse_mode,
         })
+        return {"ok": True, "result": {"message_id": mid}}
 
     def fake_send_document(chat_id, file_path, caption=None):
+        mid = next_id[0]
+        next_id[0] += 1
         sent.append({"kind": "document", "chat_id": chat_id, "text": caption, "caption": caption, "path": file_path})
+        return {"ok": True, "result": {"message_id": mid}}
 
     def fake_answer_cbq(callback_query_id, text=None):
         sent.append({"kind": "answer_cbq", "id": callback_query_id})
@@ -90,10 +100,24 @@ def _texts(sent):
     return [m["text"] for m in sent if m["kind"] == "text"]
 
 
+def _start_day(client, hh=8, mm=0, objectifs="133 160 80", **kwargs):
+    """/start_day demande desormais les objectifs horaires du jour avant de
+    demarrer reellement le shift (ForceReply) — ce helper enchaine les deux
+    messages comme le ferait un utilisateur reel."""
+    _post_message(client, "/start_day", hh, mm, **kwargs)
+    return _post_message(client, objectifs, hh, mm, **kwargs)
+
+
+def _open_poste2(client, hh, mm, objectifs="133 160 80", **kwargs):
+    """Meme principe que `_start_day` pour /poste2 (/shift2)."""
+    _post_message(client, "/poste2", hh, mm, **kwargs)
+    return _post_message(client, objectifs, hh, mm, **kwargs)
+
+
 # --- Format libre en prive (compatibilite v1) ---------------------------------
 
 def test_private_free_format_checkin(client):
-    _post_message(client, "/start_day", 8, 0)
+    _start_day(client, 8, 0)
     r = _post_message(client, "A 800\nS 660", 9, 0)
     assert r.status_code == 200
     assert "RAPPORT HORAIRE" in client.sent[-1]["text"]
@@ -102,14 +126,14 @@ def test_private_free_format_checkin(client):
 # --- Commandes de saisie -------------------------------------------------------
 
 def test_prod_multi_command(client):
-    _post_message(client, "/start_day", 8, 0)
+    _start_day(client, 8, 0)
     _post_message(client, "/prod a=133 s=160 l3=80", 9, 0)
     assert "Ligne Auto" in client.sent[-1]["text"]
     assert "Ligne 03" in client.sent[-1]["text"]
 
 
 def test_single_line_command_with_bot_suffix(client):
-    _post_message(client, "/start_day", 8, 0)
+    _start_day(client, 8, 0)
     r = _post_message(client, "/a@my_bot 250", 9, 0)
     assert r.status_code == 200
     assert "Production : 250 pcs" in client.sent[-1]["text"]
@@ -118,7 +142,7 @@ def test_single_line_command_with_bot_suffix(client):
 def test_keyboard_button_is_a_real_command(client):
     from bot import keyboards
 
-    _post_message(client, "/start_day", 8, 0)
+    _start_day(client, 8, 0)
     assert "démarré" in client.sent[-1]["text"].lower()
     _post_message(client, "/prod a=100", 9, 0)
     _post_message(client, keyboards.BTN_RECAP, 9, 5)
@@ -128,7 +152,7 @@ def test_keyboard_button_is_a_real_command(client):
 # --- Anomalie via bouton inline -------------------------------------------------
 
 def test_anomaly_confirm_via_callback(client):
-    _post_message(client, "/start_day", 8, 0)
+    _start_day(client, 8, 0)
     _post_message(client, "/a 500", 9, 0)
     r = _post_message(client, "/a 480", 10, 0)
     assert "ANOMALIE" in client.sent[-1]["text"]
@@ -140,7 +164,7 @@ def test_anomaly_confirm_via_callback(client):
 def test_report_is_sent_as_copyable_pre_block(client):
     """Plus de bouton Copier (spec Tache A) : le rapport est envoye en un
     seul message, wrappe en <pre> HTML pour etre copiable nativement."""
-    _post_message(client, "/start_day", 8, 0)
+    _start_day(client, 8, 0)
     _post_message(client, "/a 250", 9, 0)
     msg = client.sent[-1]
     assert msg["parse_mode"] == "HTML"
@@ -173,7 +197,7 @@ def test_saisie_denied_for_unlisted_user_in_group(client, monkeypatch):
     assert "non autorisé à saisir" in client.sent[-1]["text"].lower()
 
     client.sent.clear()
-    _post_message(client, "/start_day", 8, 1, chat_id=-100111, chat_type="group", user_id=42)
+    _start_day(client, 8, 1, chat_id=-100111, chat_type="group", user_id=42)
     assert "démarré" in client.sent[-1]["text"].lower()
 
 
@@ -187,7 +211,7 @@ def test_id_command_open_to_everyone(client):
 # --- Graph / Export -------------------------------------------------------------
 
 def test_graph_command_sends_photo(client):
-    _post_message(client, "/start_day", 8, 0)
+    _start_day(client, 8, 0)
     _post_message(client, "/prod a=133 s=160 l3=80", 9, 0)
     r = _post_message(client, "/graph", 9, 5)
     assert r.status_code == 200
@@ -209,7 +233,7 @@ def test_export_command_sends_document(client):
 # --- Cloture immediate au point final -------------------------------------------
 
 def test_final_point_triggers_immediate_synthese(client):
-    _post_message(client, "/start_day", 8, 0)
+    _start_day(client, 8, 0)
     for heure, val in [("09:00", 133), ("10:00", 266), ("11:00", 399), ("12:00", 532),
                        ("13:00", 598), ("14:00", 731), ("15:00", 864), ("16:00", 997)]:
         h, m = (int(x) for x in heure.split(":"))
@@ -225,13 +249,13 @@ def test_final_point_triggers_immediate_synthese(client):
 # --- Poste 2 --------------------------------------------------------------------
 
 def test_poste2_flow_via_commands(client):
-    _post_message(client, "/start_day", 8, 0)
+    _start_day(client, 8, 0)
     _post_message(client, "/a 1180", 16, 30)  # cumul de fin de poste 1
 
-    r = _post_message(client, "/a 100", 18, 0)  # poste 2 pas ouvert -> refus
-    assert "poste 2 non ouvert" in client.sent[-1]["text"].lower()
+    r = _post_message(client, "/a 100", 18, 0)  # shift 2 pas ouvert -> refus
+    assert "shift 2 non ouvert" in client.sent[-1]["text"].lower()
 
-    _post_message(client, "/poste2", 16, 35)
+    _open_poste2(client, 16, 35)
     r = _post_message(client, "/a 145", 17, 30)
     assert "Production : 145 pcs" in client.sent[-1]["text"]  # pas d'anomalie malgre la chute de cumul
 

@@ -91,6 +91,28 @@ CREATE TABLE IF NOT EXISTS interaction_state (
     PRIMARY KEY (chat_id, user_id)
 );
 
+-- Objectifs horaires saisis en debut de shift (par ligne), a la place des
+-- constantes fixes de config.LIGNES pour cette (date, poste). Absence de
+-- ligne = garder le defaut config.LIGNES.
+CREATE TABLE IF NOT EXISTS objectifs_jour (
+    date TEXT NOT NULL,
+    poste INTEGER NOT NULL,
+    code TEXT NOT NULL,
+    objectif_horaire REAL NOT NULL,
+    PRIMARY KEY (date, poste, code)
+);
+
+-- Decision par ligne de l'heure de pause dejeuner du poste 1 : "12:00" ou
+-- "13:00". Absence de ligne = defaut historique "13:00" (coef fixe deja
+-- en dur dans config.py avant cette fonctionnalite).
+CREATE TABLE IF NOT EXISTS pause_dejeuner (
+    date TEXT NOT NULL,
+    poste INTEGER NOT NULL DEFAULT 1,
+    code TEXT NOT NULL,
+    heure_pause TEXT NOT NULL,
+    PRIMARY KEY (date, poste, code)
+);
+
 INSERT OR IGNORE INTO poste_state (id, poste2_ouvert) VALUES (1, 0);
 """
 
