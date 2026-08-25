@@ -126,6 +126,64 @@ def test_pause_decisions_completes(conn):
     assert logic.pause_decisions_completes(conn, date) is True
 
 
+# --- Cumul prevu (bloc "Cumul du jour" du rapport horaire) -------------------
+
+def test_cumul_prevu_objectif_defaut_avant_pause(conn):
+    date = "2026-08-14"
+    # 09:00 : 1h ecoulee depuis le debut (08:00), pas encore de pause -> 133*1
+    assert logic._cumul_prevu(conn, date, 1, "A", "09:00") == 133
+    # 11:00 : 3h ecoulees, toujours avant la pause -> 133*3
+    assert logic._cumul_prevu(conn, date, 1, "A", "11:00") == 399
+
+
+def test_cumul_prevu_deduit_la_pause_par_defaut_a_13h(conn):
+    date = "2026-08-14"
+    # 13:00 : 5h civiles ecoulees, pause (defaut 13:00) deja passee -> -0.5h
+    # -> 4.5h effectives : floor(133*4.5) = floor(598.5) = 598
+    assert logic._cumul_prevu(conn, date, 1, "A", "13:00") == 598
+    assert logic._cumul_prevu(conn, date, 1, "S", "13:00") == 720  # floor(160*4.5)=720
+    assert logic._cumul_prevu(conn, date, 1, "SKD", "13:00") == 360  # floor(80*4.5)=360
+
+
+def test_cumul_prevu_suit_la_pause_deplacee_a_12h_pour_une_ligne(conn):
+    date = "2026-08-14"
+    logic.set_pause_dejeuner(conn, date, "A", "12:00")
+    # Pour A, la pause est deja passee des 12:00 (4h civiles - 0.5 = 3.5h),
+    # alors que S (pause par defaut, toujours a 13:00) n'a pas encore
+    # deduit sa pause a ce point -> 4h pleines.
+    assert logic._cumul_prevu(conn, date, 1, "A", "12:00") == 465  # floor(133*3.5)=465
+    assert logic._cumul_prevu(conn, date, 1, "S", "12:00") == 640  # floor(160*4)=640
+    # A 13:00, le total d'heures effectives ecoulees depuis le debut est
+    # identique pour les deux (la pause, ou qu'elle soit tombee, a deja ete
+    # deduite une fois) -> memes 4.5h effectives, memes valeurs que le cas
+    # par defaut (test_cumul_prevu_deduit_la_pause_par_defaut_a_13h).
+    assert logic._cumul_prevu(conn, date, 1, "A", "13:00") == 598
+    assert logic._cumul_prevu(conn, date, 1, "S", "13:00") == 720
+
+
+def test_cumul_prevu_utilise_objectif_jour_custom(conn):
+    date = "2026-08-14"
+    logic.set_objectifs_jour(conn, date, 1, {"A": 150})
+    assert logic._cumul_prevu(conn, date, 1, "A", "09:00") == 150
+
+
+def test_cumul_prevu_poste2_pause_fixe_a_1930(conn):
+    date = "2026-08-14"
+    # 18:30 : 2h ecoulees depuis 16:30, pause (18:30-19:30) pas encore
+    # atteinte -> pas de deduction.
+    assert logic._cumul_prevu(conn, date, 2, "A", "18:30") == 266  # 133*2
+    # 19:30 : pause fixe deja passee -> 3h - 0.5 = 2.5h
+    assert logic._cumul_prevu(conn, date, 2, "A", "19:30") == 332  # floor(133*2.5)=332.5->332
+
+
+def test_format_report_inclut_le_bloc_cumul_prevu(conn):
+    date = "2026-08-14"
+    logic.start_day(conn, date)
+    r = logic.save_checkpoint(conn, date, 1, "A", "13:00", 570, dt(13, 0).isoformat(), 0)
+    report = logic.format_report(conn, date, 1, "13:00", [r])
+    assert "570 / 598 prévues (-28)" in report
+
+
 # --- Time snapping par poste --------------------------------------------------
 
 def test_snap_poste1_exact_and_tolerance():

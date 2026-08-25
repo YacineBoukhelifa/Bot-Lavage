@@ -607,7 +607,7 @@ def process_checkin_values(
 
     lines_out = []
     if resultats:
-        lines_out.append(format_report(date, poste, heure, resultats))
+        lines_out.append(format_report(conn, date, poste, heure, resultats))
     if anomalies:
         lines_out.append(format_anomaly_warning(anomalies))
     if non_reconnues:
@@ -664,7 +664,7 @@ def confirm_pending_anomalies(conn, chat_id):
             )
         )
     clear_pending_anomalies(conn, chat_id)
-    message = "✅ Valeur(s) confirmee(s) et enregistree(s).\n\n" + format_report(date, poste, heure, resultats)
+    message = "✅ Valeur(s) confirmee(s) et enregistree(s).\n\n" + format_report(conn, date, poste, heure, resultats)
     pret_a_cloturer = is_poste_pret_a_cloturer(conn, date, poste)
     return {
         "status": "report", "message": message, "date": date, "poste": poste,
@@ -717,7 +717,7 @@ def corriger_checkpoint(conn, date, poste, code, heure, cumul_nouveau, dt, saisi
         )
         cumul_precedent = cumul
 
-    message = "✏️ Correction enregistree.\n\n" + format_report(date, poste, heure, resultats[:1])
+    message = "✏️ Correction enregistree.\n\n" + format_report(conn, date, poste, heure, resultats[:1])
     return {"status": "report", "message": message, "date": date, "poste": poste}
 
 
@@ -958,7 +958,40 @@ def fmt_pct(x):
     return f"{int(rounded)}" if float(rounded).is_integer() else f"{rounded:.1f}"
 
 
-def format_report(date, poste, heure, resultats):
+def _heures_effectives_ecoulees(conn, date, poste, code, heure):
+    """Nombre d'heures effectives ecoulees depuis le debut du poste jusqu'au
+    point de controle `heure` (inclus), pour le cumul prevu du rapport
+    horaire. La pause dejeuner ne compte que pour 0.5h au lieu d'1h pleine.
+
+    Poste 1 : suit la decision de pause par ligne (`get_pause_dejeuner`,
+    defaut 13:00 si rien n'a encore ete decide — cf. la fonctionnalite
+    pause dejeuner dynamique). Poste 2 : pause fixe a 19:30 (creneau
+    18:30-19:30), ce poste n'a pas de mecanisme de pause dynamique."""
+    debut_min = _to_minutes(_poste_config(poste)["debut"])
+    heure_min = _to_minutes(heure)
+    heures = (heure_min - debut_min) / 60
+
+    pause_fin = get_pause_dejeuner(conn, date, code) if poste == 1 else "19:30"
+    if heure_min >= _to_minutes(pause_fin):
+        heures -= 0.5
+    return heures
+
+
+def _cumul_prevu(conn, date, poste, code, heure):
+    """Cumul attendu a ce point de controle : objectif_horaire (saisi au
+    demarrage du shift, `get_objectif_horaire` — jamais une constante en
+    dur) x heures effectives ecoulees depuis le debut du poste. `None` si
+    la ligne n'a pas encore d'heures effectives ecoulees (ne devrait pas
+    arriver en pratique, le premier point de controle est toujours >= 1h
+    apres le debut du poste)."""
+    heures = _heures_effectives_ecoulees(conn, date, poste, code, heure)
+    if heures <= 0:
+        return None
+    objectif_horaire = get_objectif_horaire(conn, date, poste, code)
+    return math.floor(objectif_horaire * heures)
+
+
+def format_report(conn, date, poste, heure, resultats):
     date_obj = datetime.strptime(date, "%Y-%m-%d")
     lignes_par_code = {r["code"]: r for r in resultats}
 
@@ -981,6 +1014,12 @@ def format_report(date, poste, heure, resultats):
             pct = fmt_signed_pct(r["ecart_pct"])
             bloc.append(f"📊 Écart : {fmt_signed_qty(r['ecart'])} pcs ({pct}%)")
         bloc.append(f"📈 Cumul jour : {fmt_qty(r['cumul'])} pcs")
+
+        cumul_prevu = _cumul_prevu(conn, date, poste, code, heure)
+        if cumul_prevu is not None:
+            ecart_prevu = r["cumul"] - cumul_prevu
+            bloc.append(f"{fmt_qty(r['cumul'])} / {fmt_qty(cumul_prevu)} prévues ({fmt_signed_qty(ecart_prevu)})")
+
         blocs.append("\n".join(bloc))
 
     return header + "\n\n" + "\n\n".join(blocs)
