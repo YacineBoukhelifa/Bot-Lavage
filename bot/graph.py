@@ -14,7 +14,7 @@ import numpy as np
 
 from . import config
 
-LINE_STYLES = {"solid": "-", "dashed": "--", "dotted": ":"}
+LINE_STYLES = {"solid": "-", "dashed": "--", "dotted": ":", "dashdot": "-."}
 
 
 def generate_realisation_chart(stats):

@@ -19,17 +19,17 @@ ALGIERS_TZ = ZoneInfo(config.TIMEZONE)
 HELP_TEXT = (
     "🤖 Bot rapport horaire — BU Lavage\n\n"
     "📥 Saisir — saisie guidée : le bot demande le point de contrôle, "
-    "vous répondez juste par 3 chiffres\n"
+    "vous répondez juste par 5 chiffres\n"
     "📊 Récap — cumuls actuels du shift en cours\n"
     "📈 Graphique — graphique de la journée en cours\n"
     "⚙️ Menu — démarrer/clôturer le shift, ouvrir le shift 2, corriger "
     "une saisie, lien du fichier, aide\n\n"
-    "Ordre des lignes en saisie guidée : Auto · Semi-auto · Ligne 03 "
-    "(exemple : 800 660 90 — tapez « - » pour une ligne à l'arrêt). En "
+    "Ordre des lignes en saisie guidée : Auto · Semi-auto · Ligne 03 · Ligne 04 · Ligne 05 "
+    "(exemple : 800 660 90 90 90 — tapez « - » pour une ligne à l'arrêt). En "
     "début de shift, le bot demande d'abord les objectifs horaires du "
-    "jour (mêmes 3 valeurs, exemple : 133 160 80).\n\n"
+    "jour (mêmes 5 valeurs, exemple : 133 160 80 80 80).\n\n"
     "Les commandes texte restent disponibles pour un usage rapide : "
-    "/start_day, /shift2, /prod a=800 s=660 l3=90, /a /s /l3, "
+    "/start_day, /shift2, /prod a=800 s=660 l3=90 l4=90 l5=90, /a /s /l3 /l4 /l5, "
     "/corriger HH:MM code=valeur, /fin, /recap, /graph, /export, /id.\n\n"
     "En chat privé, le format libre (une ligne \"CODE valeur\" par ligne) "
     "reste accepté en plus des boutons et des commandes."
@@ -413,7 +413,7 @@ def _saisie_prompt_text(heure):
     return (
         f"📥 Point de contrôle {heure}\n"
         f"Envoyez les cumuls dans l'ordre :\n{noms}\n"
-        f"Exemple : 800 660 90\n"
+        f"Exemple : 800 660 90 90 90\n"
         f"Tapez « - » pour une ligne à l'arrêt."
     )
 
@@ -469,7 +469,7 @@ def _guide_process_cumuls(conn, chat_id, dt, text, sender_id, sender_nom, state)
         return [{
             "text": (
                 f"Format invalide. Envoyez {len(config.ORDRE_AFFICHAGE)} valeurs séparées par un "
-                f"espace (ex. 800 660 90), ou « - » pour une ligne à l'arrêt."
+                f"espace (ex. 800 660 90 90 90), ou « - » pour une ligne à l'arrêt."
             ),
             "status": "error",
         }]
@@ -591,7 +591,7 @@ def _guide_process_objectifs(conn, chat_id, dt, text, sender_id, state):
         return [{
             "text": (
                 f"Format invalide. Envoyez {len(config.ORDRE_AFFICHAGE)} valeurs séparées par un "
-                f"espace (ex. 133 160 80), ou « - » pour garder l'objectif habituel d'une ligne."
+                f"espace (ex. 133 160 80 80 80), ou « - » pour garder l'objectif habituel d'une ligne."
             ),
             "status": "error",
         }]
@@ -670,7 +670,7 @@ def _cb_pause_dejeuner(conn, callback_query, dt, reponse):
         )
         return []
 
-    # Les 3 lignes sont decidees -> on enchaine directement sur la saisie
+    # Les 5 lignes sont decidees -> on enchaine directement sur la saisie
     # normale du point 12:00 (meme motif que _cb_guide_corriger : edition +
     # nouveau sendMessage ForceReply).
     _safe_edit_or_send(chat_id, message["message_id"], "✅ Pauses déjeuner enregistrées.", reply_markup=None)

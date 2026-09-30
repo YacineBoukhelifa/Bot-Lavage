@@ -100,16 +100,20 @@ def _texts(sent):
     return [m["text"] for m in sent if m["kind"] == "text"]
 
 
-def _start_day(client, hh=8, mm=0, objectifs="133 160 80", **kwargs):
+def _start_day(client, hh=8, mm=0, objectifs=None, **kwargs):
     """/start_day demande desormais les objectifs horaires du jour avant de
     demarrer reellement le shift (ForceReply) — ce helper enchaine les deux
     messages comme le ferait un utilisateur reel."""
+    if objectifs is None:
+        objectifs = " ".join(str(client.app_module.config.LIGNES[c]["objectif_horaire"]) for c in client.app_module.config.ORDRE_AFFICHAGE)
     _post_message(client, "/start_day", hh, mm, **kwargs)
     return _post_message(client, objectifs, hh, mm, **kwargs)
 
 
-def _open_poste2(client, hh, mm, objectifs="133 160 80", **kwargs):
+def _open_poste2(client, hh, mm, objectifs=None, **kwargs):
     """Meme principe que `_start_day` pour /poste2 (/shift2)."""
+    if objectifs is None:
+        objectifs = " ".join(str(client.app_module.config.LIGNES[c]["objectif_horaire"]) for c in client.app_module.config.ORDRE_AFFICHAGE)
     _post_message(client, "/poste2", hh, mm, **kwargs)
     return _post_message(client, objectifs, hh, mm, **kwargs)
 

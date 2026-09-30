@@ -16,9 +16,11 @@ LIGNES = {
     "A":   {"nom_affiche": "Ligne Auto",      "objectif_horaire": 133},
     "S":   {"nom_affiche": "Ligne Semi-auto", "objectif_horaire": 160},
     "SKD": {"nom_affiche": "Ligne 03",        "objectif_horaire": 80},
+    "L4":  {"nom_affiche": "Ligne 04",        "objectif_horaire": 80},
+    "L5":  {"nom_affiche": "Ligne 05",        "objectif_horaire": 80},
 }
 
-ORDRE_AFFICHAGE = ["A", "S", "SKD"]
+ORDRE_AFFICHAGE = ["A", "S", "SKD", "L4", "L5"]
 
 # Alias de saisie acceptes (insensibles a la casse) -> code interne.
 CODES_ACCEPTES = {
@@ -28,6 +30,12 @@ CODES_ACCEPTES = {
     "L3": "SKD",
     "03": "SKD",
     "3": "SKD",
+    "L4": "L4",
+    "04": "L4",
+    "4": "L4",
+    "L5": "L5",
+    "05": "L5",
+    "5": "L5",
 }
 
 # --- Grilles horaires des postes (spec v2 §3 et §4) ---
@@ -104,8 +112,8 @@ AUTORISATIONS = {
 }
 
 # --- Graphique (spec v2 §6.2) ---
-GRAPH_COLORS = {"A": "#2a78d6", "S": "#eb6834", "SKD": "#1baf7a"}
-GRAPH_DASHES = {"A": "solid", "S": "dashed", "SKD": "dotted"}
+GRAPH_COLORS = {"A": "#2a78d6", "S": "#eb6834", "SKD": "#1baf7a", "L4": "#d62a9d", "L5": "#a3d62a"}
+GRAPH_DASHES = {"A": "solid", "S": "dashed", "SKD": "dotted", "L4": "dashdot", "L5": "solid"}
 GRAPH_SIZE_PX = (1200, 700)
 GRAPH_DPI = 100
 

@@ -134,16 +134,20 @@ def _seed_poste_actif(date, poste=1):
     conn.close()
 
 
-def _start_day(client, hh, mm, objectifs="133 160 80", **kwargs):
+def _start_day(client, hh, mm, objectifs=None, **kwargs):
     """/start_day demande desormais les objectifs horaires du jour
     (ForceReply) avant de demarrer reellement le shift — ce helper enchaine
     les deux messages comme le ferait un utilisateur reel."""
+    if objectifs is None:
+        objectifs = " ".join(str(client.app_module.config.LIGNES[c]["objectif_horaire"]) for c in client.app_module.config.ORDRE_AFFICHAGE)
     _post_message(client, "/start_day", hh, mm, **kwargs)
     return _post_message(client, objectifs, hh, mm, **kwargs)
 
 
-def _open_poste2(client, hh, mm, objectifs="133 160 80", **kwargs):
+def _open_poste2(client, hh, mm, objectifs=None, **kwargs):
     """Meme principe que `_start_day`, pour /poste2 (/shift2)."""
+    if objectifs is None:
+        objectifs = " ".join(str(client.app_module.config.LIGNES[c]["objectif_horaire"]) for c in client.app_module.config.ORDRE_AFFICHAGE)
     _post_message(client, "/poste2", hh, mm, **kwargs)
     return _post_message(client, objectifs, hh, mm, **kwargs)
 
@@ -172,7 +176,7 @@ def test_saisie_guidee_happy_path(client):
     assert prompt["reply_markup"] == {"force_reply": True, "selective": True}
     assert "09:00" in prompt["text"]
 
-    _post_message(client, "133 160 80", 9, 1, reply_to_mid=prompt["mid"])
+    _post_message(client, "133 160 80 80 80", 9, 1, reply_to_mid=prompt["mid"])
     card = _last(client.sent)
     assert card["kind"] == "edit" and card["mid"] == prompt["mid"]
     assert "à valider" in card["text"]
@@ -197,7 +201,7 @@ def test_saisie_guidee_ligne_a_larret(client):
     _start_day(client, 8, 0)
     _post_message(client, "/saisir", 9, 0)
     prompt = _last(client.sent)
-    _post_message(client, "133 - 80", 9, 1, reply_to_mid=prompt["mid"])
+    _post_message(client, "133 - 80 80 80", 9, 1, reply_to_mid=prompt["mid"])
     card = _last(client.sent)
     assert "Ligne Semi-auto" not in card["text"]
     assert "Ligne Auto" in card["text"] and "Ligne 03" in card["text"]
@@ -207,10 +211,10 @@ def test_saisie_guidee_format_invalide_garde_letat(client):
     _start_day(client, 8, 0)
     _post_message(client, "/saisir", 9, 0)
     prompt = _last(client.sent)
-    r = _post_message(client, "pas trois nombres ici", 9, 1, reply_to_mid=prompt["mid"])
+    r = _post_message(client, "pas cinq nombres ici", 9, 1, reply_to_mid=prompt["mid"])
     assert "invalide" in _last(client.sent)["text"].lower()
     # l'etat n'a pas avance : une reponse valide juste apres doit encore marcher
-    _post_message(client, "100 100 50", 9, 2, reply_to_mid=prompt["mid"])
+    _post_message(client, "100 100 50 50 50", 9, 2, reply_to_mid=prompt["mid"])
     assert "à valider" in _last(client.sent)["text"]
 
 
@@ -226,7 +230,7 @@ def test_guide_corriger_reboucle_sur_forcereply(client):
     _seed_poste_actif(today)
     _seed_attente_cumuls(client, "09:00", message_id=42, date=today, dt=n)
 
-    _post_message(client, "133 160 80", n.hour, n.minute, reply_to_mid=42, date=today)
+    _post_message(client, "133 160 80 80 80", n.hour, n.minute, reply_to_mid=42, date=today)
     card = _last(client.sent)
 
     _post_callback(client, "guide_corriger", message_id=card["mid"])
@@ -234,7 +238,7 @@ def test_guide_corriger_reboucle_sur_forcereply(client):
     assert new_prompt["kind"] == "send"  # editer un message en ForceReply est impossible -> nouveau message
     assert new_prompt["reply_markup"] == {"force_reply": True, "selective": True}
 
-    _post_message(client, "200 200 100", n.hour, n.minute, reply_to_mid=new_prompt["mid"], date=today)
+    _post_message(client, "200 200 100 100 100", n.hour, n.minute, reply_to_mid=new_prompt["mid"], date=today)
     corrected_card = _last(client.sent)
     assert "200" in corrected_card["text"]
 
@@ -246,13 +250,13 @@ def test_saisie_guidee_anomalie_garde_boutons_confirmation(client):
     _start_day(client, 8, 0)
     _post_message(client, "/saisir", 9, 0)
     p1 = _last(client.sent)
-    _post_message(client, "500 500 500", 9, 1, reply_to_mid=p1["mid"])
+    _post_message(client, "500 500 500 500 500", 9, 1, reply_to_mid=p1["mid"])
     c1 = _last(client.sent)
     _post_callback(client, "guide_valider", message_id=c1["mid"])
 
     _post_message(client, "/saisir", 10, 0)
     p2 = _last(client.sent)
-    _post_message(client, "480 500 500", 10, 1, reply_to_mid=p2["mid"])  # baisse pour A -> anomalie
+    _post_message(client, "480 500 500 500 500", 10, 1, reply_to_mid=p2["mid"])  # baisse pour A -> anomalie
     c2 = _last(client.sent)
     _post_callback(client, "guide_valider", message_id=c2["mid"])
     anomaly_card = _last(client.sent)
@@ -271,11 +275,11 @@ def test_isolation_par_utilisateur_en_groupe(client):
     prompt_sara = _last(client.sent)
     assert prompt_ali["mid"] != prompt_sara["mid"]
 
-    _post_message(client, "266 320 160", 10, 2, user_id=22, reply_to_mid=prompt_sara["mid"])
+    _post_message(client, "266 320 160 160 160", 10, 2, user_id=22, reply_to_mid=prompt_sara["mid"])
     card_sara = _last(client.sent)
     assert card_sara["mid"] == prompt_sara["mid"]
 
-    _post_message(client, "133 160 80", 10, 3, user_id=11, reply_to_mid=prompt_ali["mid"])
+    _post_message(client, "133 160 80 80 80", 10, 3, user_id=11, reply_to_mid=prompt_ali["mid"])
     card_ali = _last(client.sent)
     assert card_ali["mid"] == prompt_ali["mid"]
     assert "133" in card_ali["text"]  # pas ecrase par la saisie de Sara
@@ -285,7 +289,7 @@ def test_callback_rejoue_sur_carte_dautrui_est_rejete(client):
     _start_day(client, 8, 0)
     _post_message(client, "/saisir", 9, 0, user_id=11)
     prompt_ali = _last(client.sent)
-    _post_message(client, "133 160 80", 9, 1, user_id=11, reply_to_mid=prompt_ali["mid"])
+    _post_message(client, "133 160 80 80 80", 9, 1, user_id=11, reply_to_mid=prompt_ali["mid"])
     card_ali = _last(client.sent)
 
     client.sent.clear()
@@ -316,7 +320,7 @@ def test_etat_expire_est_ignore(client):
     _seed_attente_cumuls(client, "09:00", prompt["mid"], dt=past)
 
     client.sent.clear()
-    _post_message(client, "133 160 80", 9, 5, reply_to_mid=prompt["mid"])
+    _post_message(client, "133 160 80 80 80", 9, 5, reply_to_mid=prompt["mid"])
     # etat expire -> traite comme texte libre -> ignore en groupe (privacy mode)
     assert client.sent == []
 
@@ -362,7 +366,7 @@ def test_menu_demarrage_confirme(client):
     assert prompt["reply_markup"] == {"force_reply": True, "selective": True}
 
     client.sent.clear()
-    _post_message(client, "133 160 80", n.hour, n.minute, reply_to_mid=prompt["mid"], date=today)
+    _post_message(client, "133 160 80 80 80", n.hour, n.minute, reply_to_mid=prompt["mid"], date=today)
     # Pas forcement le tout dernier message : si l'heure reelle depasse deja
     # la fin du poste 1, la verification opportuniste de cloture (spec v2
     # §5.1, meme webhook) ajoute une synthese juste derriere.
@@ -392,7 +396,7 @@ def test_menu_corriger_flow_complet(client):
     conn.close()
 
     client.sent.clear()
-    _post_message(client, "100 100 50", n.hour, n.minute, reply_to_mid=9999, date=today)
+    _post_message(client, "100 100 50 50 50", n.hour, n.minute, reply_to_mid=9999, date=today)
     card = _last(client.sent)
     _post_callback(client, "guide_valider", message_id=card["mid"])
 
@@ -427,11 +431,11 @@ def test_menu_corriger_flow_complet(client):
 # --- Objectifs journaliers configurables (debut de shift) ----------------------
 
 def test_saisie_guidee_utilise_objectifs_jour_custom(client):
-    _start_day(client, 8, 0, objectifs="150 170 90")
+    _start_day(client, 8, 0, objectifs="150 170 90 90 90")
 
     _post_message(client, "/saisir", 9, 0)
     prompt = _last(client.sent)
-    _post_message(client, "150 170 90", 9, 1, reply_to_mid=prompt["mid"])
+    _post_message(client, "150 170 90 90 90", 9, 1, reply_to_mid=prompt["mid"])
     card = _last(client.sent)
 
     client.sent.clear()
@@ -473,7 +477,7 @@ def test_pause_dejeuner_questions_puis_saisie_normale(client):
     conn = db_module.get_connection()
     logic_module.set_interaction_state(
         conn, CHAT_ID, "11", "ATTENTE_PAUSE_DEJEUNER",
-        {"date": today, "poste": 1, "codes_restants": ["A", "S", "SKD"]}, n, 1,
+        {"date": today, "poste": 1, "codes_restants": ["A", "S", "SKD", "L4", "L5"]}, n, 1,
     )
     conn.close()
 
@@ -486,6 +490,14 @@ def test_pause_dejeuner_questions_puis_saisie_normale(client):
     assert "Ligne 03" in q3["text"]
 
     _post_callback(client, "pause_dej|non", message_id=q3["mid"])
+    q4 = _last(client.sent)
+    assert "Ligne 04" in q4["text"]
+
+    _post_callback(client, "pause_dej|non", message_id=q4["mid"])
+    q5 = _last(client.sent)
+    assert "Ligne 05" in q5["text"]
+
+    _post_callback(client, "pause_dej|non", message_id=q5["mid"])
     prompt = _last(client.sent)
     assert prompt["kind"] == "send"
     assert prompt["reply_markup"] == {"force_reply": True, "selective": True}
@@ -495,9 +507,11 @@ def test_pause_dejeuner_questions_puis_saisie_normale(client):
     assert logic_module.get_pause_dejeuner(conn, today, "A") == "12:00"
     assert logic_module.get_pause_dejeuner(conn, today, "S") == "13:00"
     assert logic_module.get_pause_dejeuner(conn, today, "SKD") == "13:00"
+    assert logic_module.get_pause_dejeuner(conn, today, "L4") == "13:00"
+    assert logic_module.get_pause_dejeuner(conn, today, "L5") == "13:00"
     conn.close()
 
-    _post_message(client, "66 160 80", n.hour, n.minute, reply_to_mid=prompt["mid"], date=today)
+    _post_message(client, "66 160 80 80 80", n.hour, n.minute, reply_to_mid=prompt["mid"], date=today)
     card = _last(client.sent)
     _post_callback(client, "guide_valider", message_id=card["mid"])
 
@@ -519,7 +533,7 @@ def test_pause_dejeuner_non_declenchee_deux_fois(client):
     from bot import db as db_module, logic as logic_module
 
     conn = db_module.get_connection()
-    for code in ("A", "S", "SKD"):
+    for code in ("A", "S", "SKD", "L4", "L5"):
         logic_module.set_pause_dejeuner(conn, TEST_DATE, code, "13:00")
     conn.close()
 
@@ -562,7 +576,7 @@ def test_pause_dejeuner_callback_sur_carte_perimee_est_rejete(client):
     conn = db_module.get_connection()
     logic_module.set_interaction_state(
         conn, CHAT_ID, "11", "ATTENTE_PAUSE_DEJEUNER",
-        {"date": today, "poste": 1, "codes_restants": ["A", "S", "SKD"]}, n, 1,
+        {"date": today, "poste": 1, "codes_restants": ["A", "S", "SKD", "L4", "L5"]}, n, 1,
     )
     conn.close()
 
@@ -588,7 +602,7 @@ def test_pause_dejeuner_tout_non_garde_defaut_pour_toutes_les_lignes(client):
     conn = db_module.get_connection()
     logic_module.set_interaction_state(
         conn, CHAT_ID, "11", "ATTENTE_PAUSE_DEJEUNER",
-        {"date": today, "poste": 1, "codes_restants": ["A", "S", "SKD"]}, n, 1,
+        {"date": today, "poste": 1, "codes_restants": ["A", "S", "SKD", "L4", "L5"]}, n, 1,
     )
     conn.close()
 
@@ -597,9 +611,13 @@ def test_pause_dejeuner_tout_non_garde_defaut_pour_toutes_les_lignes(client):
     _post_callback(client, "pause_dej|non", message_id=q2["mid"])
     q3 = _last(client.sent)
     _post_callback(client, "pause_dej|non", message_id=q3["mid"])
+    q4 = _last(client.sent)
+    _post_callback(client, "pause_dej|non", message_id=q4["mid"])
+    q5 = _last(client.sent)
+    _post_callback(client, "pause_dej|non", message_id=q5["mid"])
     prompt12 = _last(client.sent)
 
-    _post_message(client, "133 160 80", n.hour, n.minute, reply_to_mid=prompt12["mid"], date=today)
+    _post_message(client, "133 160 80 80 80", n.hour, n.minute, reply_to_mid=prompt12["mid"], date=today)
     card12 = _last(client.sent)
     _post_callback(client, "guide_valider", message_id=card12["mid"])
 
@@ -609,7 +627,7 @@ def test_pause_dejeuner_tout_non_garde_defaut_pour_toutes_les_lignes(client):
     # necessaire aux callbacks pause_dej precedents (meme remarque que
     # test_guide_corriger_reboucle_sur_forcereply).
     _seed_attente_cumuls(client, "13:00", message_id=555, date=today, dt=n)
-    _post_message(client, "199 240 120", n.hour, n.minute, reply_to_mid=555, date=today)
+    _post_message(client, "199 240 120 120 120", n.hour, n.minute, reply_to_mid=555, date=today)
     card13 = _last(client.sent)
     _post_callback(client, "guide_valider", message_id=card13["mid"])
 
@@ -673,14 +691,14 @@ def test_saisie_guidee_point_final_cloture_et_restaure_clavier(client):
     from bot import db as db_module, logic as logic_module
 
     conn = db_module.get_connection()
-    for code in ("A", "S", "SKD"):
+    for code in ("A", "S", "SKD", "L4", "L5"):
         logic_module.set_pause_dejeuner(conn, TEST_DATE, code, "13:00")
     conn.close()
 
     checkpoints = [
-        ("09:00", "133 160 80"), ("10:00", "266 320 160"), ("11:00", "399 480 240"),
-        ("12:00", "532 640 320"), ("13:00", "598 720 360"), ("14:00", "731 880 440"),
-        ("15:00", "864 1040 520"), ("16:00", "997 1200 600"),
+        ("09:00", "133 160 80 80 80"), ("10:00", "266 320 160 160 160"), ("11:00", "399 480 240 240 240"),
+        ("12:00", "532 640 320 320 320"), ("13:00", "598 720 360 360 360"), ("14:00", "731 880 440 440 440"),
+        ("15:00", "864 1040 520 520 520"), ("16:00", "997 1200 600 600 600"),
     ]
     for heure, valeurs in checkpoints:
         h, m = (int(x) for x in heure.split(":"))
@@ -696,7 +714,7 @@ def test_saisie_guidee_point_final_cloture_et_restaure_clavier(client):
     # final complet).
     _post_message(client, "/saisir", 16, 30)
     prompt = _last(client.sent)
-    _post_message(client, "1180 1240 632", 16, 30, reply_to_mid=prompt["mid"])
+    _post_message(client, "1180 1240 632 632 632", 16, 30, reply_to_mid=prompt["mid"])
     card = _last(client.sent)
 
     client.sent.clear()
@@ -726,7 +744,7 @@ def test_shift2_est_alias_de_poste2(client):
     assert prompt["reply_markup"] == {"force_reply": True, "selective": True}
     assert "Objectifs horaires" in prompt["text"]
 
-    _post_message(client, "140 150 70", 16, 35, reply_to_mid=prompt["mid"])
+    _post_message(client, "140 150 70 70 70", 16, 35, reply_to_mid=prompt["mid"])
     result = _last(client.sent)
     assert "shift 2" in result["text"].lower()
     assert "activé" in result["text"].lower()
@@ -743,19 +761,19 @@ def test_shift2_est_alias_de_poste2(client):
 def test_objectifs_jour_format_invalide_garde_letat(client):
     _post_message(client, "/start_day", 8, 0)
     prompt = _last(client.sent)
-    _post_message(client, "pas trois nombres", 8, 1, reply_to_mid=prompt["mid"])
+    _post_message(client, "pas cinq nombres", 8, 1, reply_to_mid=prompt["mid"])
     assert "invalide" in _last(client.sent)["text"].lower()
     # l'etat n'a pas avance : une reponse valide juste apres doit encore marcher
-    _post_message(client, "133 160 80", 8, 2, reply_to_mid=prompt["mid"])
+    _post_message(client, "133 160 80 80 80", 8, 2, reply_to_mid=prompt["mid"])
     assert "démarré" in _last(client.sent)["text"].lower()
 
 
 def test_objectifs_jour_tiret_garde_defaut_pour_une_ligne(client):
-    _start_day(client, 8, 0, objectifs="150 - 90")
+    _start_day(client, 8, 0, objectifs="150 - 90 - -")
 
     _post_message(client, "/saisir", 9, 0)
     prompt = _last(client.sent)
-    _post_message(client, "150 160 90", 9, 1, reply_to_mid=prompt["mid"])
+    _post_message(client, "150 160 90 80 80", 9, 1, reply_to_mid=prompt["mid"])
     card = _last(client.sent)
 
     client.sent.clear()
@@ -767,14 +785,14 @@ def test_objectifs_jour_tiret_garde_defaut_pour_une_ligne(client):
 
 
 def test_objectifs_jour_independants_entre_poste1_et_poste2(client):
-    _start_day(client, 8, 0, objectifs="150 170 90")
+    _start_day(client, 8, 0, objectifs="150 170 90 90 90")
     _post_message(client, "/fin", 16, 25)  # cloture propre du poste 1 avant le poste 2
-    _open_poste2(client, 16, 35, objectifs="140 150 70")
+    _open_poste2(client, 16, 35, objectifs="140 150 70 70 70")
 
     client.sent.clear()
     _post_message(client, "/saisir", 17, 30)  # premier point du poste 2
     prompt = _last(client.sent)
-    _post_message(client, "140 150 70", 17, 30, reply_to_mid=prompt["mid"])
+    _post_message(client, "140 150 70 70 70", 17, 30, reply_to_mid=prompt["mid"])
     card = _last(client.sent)
 
     client.sent.clear()
@@ -798,6 +816,6 @@ def test_objectifs_jour_etat_expire_est_ignore(client):
     conn.close()
 
     client.sent.clear()
-    _post_message(client, "133 160 80", 8, 5, reply_to_mid=prompt["mid"])
+    _post_message(client, "133 160 80 80 80", 8, 5, reply_to_mid=prompt["mid"])
     # etat expire -> traite comme texte libre -> ignore en groupe (privacy mode)
     assert client.sent == []

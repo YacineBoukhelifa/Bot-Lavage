@@ -123,6 +123,10 @@ def test_pause_decisions_completes(conn):
     logic.set_pause_dejeuner(conn, date, "S", "13:00")
     assert logic.pause_decisions_completes(conn, date) is False
     logic.set_pause_dejeuner(conn, date, "SKD", "13:00")
+    assert logic.pause_decisions_completes(conn, date) is False
+    logic.set_pause_dejeuner(conn, date, "L4", "13:00")
+    assert logic.pause_decisions_completes(conn, date) is False
+    logic.set_pause_dejeuner(conn, date, "L5", "13:00")
     assert logic.pause_decisions_completes(conn, date) is True
 
 
