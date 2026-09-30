@@ -8,6 +8,19 @@ from . import config
 
 API_BASE = "https://api.telegram.org/bot{token}"
 
+# PythonAnywhere free tier routes outbound HTTPS through a proxy.
+# On detecte automatiquement le proxy via les variables d'env standard.
+_PROXIES = None
+_proxy_url = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
+if _proxy_url:
+    _PROXIES = {"https": _proxy_url, "http": _proxy_url}
+elif os.path.exists("/etc/pythonanywhere_analystics_whitelist"):
+    # Fallback explicite pour PythonAnywhere si la var n'est pas definie
+    _PROXIES = {
+        "https": "http://proxy.server.test.pythonanywhere.com:3128",
+        "http":  "http://proxy.server.test.pythonanywhere.com:3128",
+    }
+
 
 def _endpoint_name(url):
     """Nom de la methode Telegram appelee, sans le token (jamais expose dans
@@ -35,7 +48,7 @@ def send_message(chat_id, text, reply_markup=None, parse_mode=None):
         payload["reply_markup"] = reply_markup
     if parse_mode is not None:
         payload["parse_mode"] = parse_mode
-    resp = requests.post(url, json=payload, timeout=10)
+    resp = requests.post(url, json=payload, timeout=10, proxies=_PROXIES)
     return _check(resp)
 
 
@@ -49,7 +62,7 @@ def send_photo(chat_id, photo_bytes, caption=None, reply_markup=None, parse_mode
         data["reply_markup"] = json.dumps(reply_markup)
     if parse_mode is not None:
         data["parse_mode"] = parse_mode
-    resp = requests.post(url, data=data, files=files, timeout=30)
+    resp = requests.post(url, data=data, files=files, timeout=30, proxies=_PROXIES)
     return _check(resp)
 
 
@@ -60,7 +73,7 @@ def send_document(chat_id, file_path, caption=None):
         data = {"chat_id": chat_id}
         if caption is not None:
             data["caption"] = caption
-        resp = requests.post(url, data=data, files=files, timeout=60)
+        resp = requests.post(url, data=data, files=files, timeout=60, proxies=_PROXIES)
     return _check(resp)
 
 
@@ -73,7 +86,7 @@ def edit_message_text(chat_id, message_id, text, reply_markup=None, parse_mode=N
         payload["reply_markup"] = reply_markup
     if parse_mode is not None:
         payload["parse_mode"] = parse_mode
-    resp = requests.post(url, json=payload, timeout=10)
+    resp = requests.post(url, json=payload, timeout=10, proxies=_PROXIES)
     if resp.status_code == 400 and "message is not modified" in resp.text.lower():
         return {"ok": True, "result": None}
     return _check(resp)
@@ -84,7 +97,7 @@ def edit_message_reply_markup(chat_id, message_id, reply_markup=None):
     desactiver les boutons deja utilises pour empecher une double action)."""
     url = f"{API_BASE.format(token=config.BOT_TOKEN)}/editMessageReplyMarkup"
     payload = {"chat_id": chat_id, "message_id": message_id, "reply_markup": reply_markup or {"inline_keyboard": []}}
-    resp = requests.post(url, json=payload, timeout=10)
+    resp = requests.post(url, json=payload, timeout=10, proxies=_PROXIES)
     if resp.status_code == 400 and "message is not modified" in resp.text.lower():
         return {"ok": True, "result": None}
     return _check(resp)
@@ -93,7 +106,7 @@ def edit_message_reply_markup(chat_id, message_id, reply_markup=None):
 def set_my_commands(commands):
     """`commands` : liste de {"command": "start", "description": "..."}."""
     url = f"{API_BASE.format(token=config.BOT_TOKEN)}/setMyCommands"
-    resp = requests.post(url, json={"commands": commands}, timeout=10)
+    resp = requests.post(url, json={"commands": commands}, timeout=10, proxies=_PROXIES)
     return _check(resp)
 
 
@@ -102,11 +115,11 @@ def answer_callback_query(callback_query_id, text=None):
     payload = {"callback_query_id": callback_query_id}
     if text is not None:
         payload["text"] = text
-    resp = requests.post(url, json=payload, timeout=10)
+    resp = requests.post(url, json=payload, timeout=10, proxies=_PROXIES)
     return _check(resp)
 
 
 def set_webhook(webhook_url):
     url = f"{API_BASE.format(token=config.BOT_TOKEN)}/setWebhook"
-    resp = requests.post(url, json={"url": webhook_url}, timeout=10)
+    resp = requests.post(url, json={"url": webhook_url}, timeout=10, proxies=_PROXIES)
     return _check(resp)
