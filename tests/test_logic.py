@@ -185,7 +185,9 @@ def test_format_report_inclut_le_bloc_cumul_prevu(conn):
     logic.start_day(conn, date)
     r = logic.save_checkpoint(conn, date, 1, "A", "13:00", 570, dt(13, 0).isoformat(), 0)
     report = logic.format_report(conn, date, 1, "13:00", [r])
-    assert "570 / 598 prévues (-28)" in report
+    # écart cumul jour (±pcs) is hidden from display — only "X / Y prévues" shown
+    assert "570 / 598 prévues" in report
+    assert "(-28)" not in report
 
 
 # --- Time snapping par poste --------------------------------------------------
@@ -244,7 +246,8 @@ def test_checkin_report_uses_point_objectif(conn):
     r = logic.process_checkin(conn, "chat1", date, 1, dt(13, 0), "A 598")  # +66, pause dejeuner
     assert "🎯 Objectif : 66 pcs" in r["message"]
     assert "✅ Production : 66 pcs" in r["message"]
-    assert "📊 Écart : +0 pcs (+0%)" in r["message"]
+    # écart (pcs & %) is hidden from display — still stored in DB
+    assert "Écart" not in r["message"]
 
 
 def test_no_active_poste_refuses(conn):

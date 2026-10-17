@@ -1011,14 +1011,13 @@ def format_report(conn, date, poste, heure, resultats):
         bloc = [f"🏗️ {r['nom']}", f"✅ Production : {fmt_qty(r['production'])} pcs"]
         if r["objectif"] is not None:
             bloc.append(f"🎯 Objectif : {fmt_qty(r['objectif'])} pcs")
-            pct = fmt_signed_pct(r["ecart_pct"])
-            bloc.append(f"📊 Écart : {fmt_signed_qty(r['ecart'])} pcs ({pct}%)")
+            # écart (pcs & %) hidden from display — still stored in DB
         bloc.append(f"📈 Cumul jour : {fmt_qty(r['cumul'])} pcs")
 
         cumul_prevu = _cumul_prevu(conn, date, poste, code, heure)
         if cumul_prevu is not None:
-            ecart_prevu = r["cumul"] - cumul_prevu
-            bloc.append(f"{fmt_qty(r['cumul'])} / {fmt_qty(cumul_prevu)} prévues ({fmt_signed_qty(ecart_prevu)})")
+            # écart cumul jour (+ / - pcs) hidden from display — still computed
+            bloc.append(f"{fmt_qty(r['cumul'])} / {fmt_qty(cumul_prevu)} prévues")
 
         blocs.append("\n".join(bloc))
 
@@ -1053,7 +1052,7 @@ def format_synthese(stats):
             f"🏗️ {l['nom'].upper()}",
             f"📦 Production totale : {fmt_qty(l['total'])} pcs",
             f"🎯 Objectif du poste : {fmt_qty(l['objectif'])} pcs",
-            f"📊 Écart : {fmt_signed_qty(l['ecart'])} pcs ({fmt_signed_pct(l['ecart_pct'])}%)",
+            # écart (pcs & %) hidden from display — still stored in DB
             f"⚡ Moyenne horaire : {fmt_qty(l['moyenne_horaire'])} pcs/h",
             f"🏆 Meilleure heure : {l['meilleure_heure'][0]} ({fmt_qty(l['meilleure_heure'][1])} pcs)",
             f"🔻 Heure la plus faible : {l['pire_heure'][0]} ({fmt_qty(l['pire_heure'][1])} pcs)",
